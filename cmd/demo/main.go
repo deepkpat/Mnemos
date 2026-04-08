@@ -21,14 +21,14 @@ func main() {
 		// Don't use WithReasoning() for small models - they go on thinking rampages
 		ollama.WithReasoning(),
 		ollama.WithContextWindow(32_000),
-		ollama.WithMaxTokens(2048),
+		ollama.WithMaxTokens(4096),
 	)
 
 	// Build a conversation context
 	conv := &ai.Context{
-		SystemPrompt: "you are an expert coder who can solve any problem",
+		SystemPrompt: "you are an expert programmer who writes clean and intuitive code, that anyone can explain just by looking at it. you first formalize the problem and break it in small parts before you code. you do not use emojis.",
 		Messages: []ai.Message{
-			ai.NewUserMessage("implement min heap from scratch in python"),
+			ai.NewUserMessage("implement hash set from scratch in python, you can only use list/array"),
 		},
 	}
 
@@ -48,17 +48,17 @@ func main() {
 	for event := range stream.Events() {
 		switch event.Type {
 		case ai.EventThinkingStart:
-			fmt.Print("\n[Thinking] ")
+			fmt.Print("\n[Thinking]\n")
 		case ai.EventThinkingDelta:
 			fmt.Print(event.Delta)
 		case ai.EventThinkingEnd:
-			fmt.Print("[ThinkingEnd]")
+			fmt.Print("\n[ThinkingEnd]\n")
 		case ai.EventTextStart:
-			fmt.Print("[Response] ")
+			fmt.Print("\n[Response]\n")
 		case ai.EventTextDelta:
 			fmt.Print(event.Delta)
 		case ai.EventTextEnd:
-			fmt.Print("[ResponseEnd]")
+			fmt.Print("\n[ResponseEnd]\n")
 		case ai.EventDone:
 			fmt.Printf("\n\n--- Done (stop: %s, tokens: %d in / %d out) ---\n",
 				event.Message.StopReason,
