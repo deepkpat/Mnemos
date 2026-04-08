@@ -6,53 +6,6 @@ import (
 	"mnemos/pkg/ai"
 )
 
-// --- Request payload types ---
-
-type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []chatTool    `json:"tools,omitempty"`
-	Format   any           `json:"format,omitempty"`
-	Options  *chatOptions  `json:"options,omitempty"`
-	Stream   bool          `json:"stream"`
-	Think    bool          `json:"think,omitempty"`
-}
-
-type chatOptions struct {
-	Temperature *float64 `json:"temperature,omitempty"`
-	NumPredict  int      `json:"num_predict,omitempty"`
-	NumCtx      int      `json:"num_ctx,omitempty"`
-}
-
-type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	Images     []string       `json:"images,omitempty"`
-}
-
-type chatToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function chatFunctionCall `json:"function"`
-}
-
-type chatFunctionCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-type chatTool struct {
-	Type     string       `json:"type"`
-	Function chatFunction `json:"function"`
-}
-
-type chatFunction struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
-}
-
 // --- Message conversion ---
 
 // buildPayload converts the unified ai.Context into an Ollama chat completion request.

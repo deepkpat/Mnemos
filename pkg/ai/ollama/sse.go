@@ -11,33 +11,6 @@ import (
 	"mnemos/pkg/ai"
 )
 
-// --- Native JSON response types ---
-
-// Ollama streams native JSON responses (newline-delimited):
-//  {"model":"...","message":{"role":"assistant","content":"..."},"done":false}
-//  {"model":"...","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop",...}
-
-type nativeChunk struct {
-	Model           string        `json:"model"`
-	Message         nativeMessage `json:"message"`
-	Done            bool          `json:"done"`
-	DoneReason      string        `json:"done_reason,omitempty"`
-	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
-	EvalCount       int           `json:"eval_count,omitempty"`
-}
-
-type nativeMessage struct {
-	Role      string         `json:"role"`
-	Content   string         `json:"content"`
-	Thinking  string         `json:"thinking,omitempty"`
-	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
-}
-
-// chatToolCall is already defined in convert.go, but we need it here for parsing
-// Unmarshaling into it should work if it's identical or we can just redefine it.
-// Actually since they are in the same package, we can use the one from convert.go.
-// Wait, convert.go defined it as chatToolCall. Let's use it.
-
 // --- Stream parsing ---
 
 func (p *Provider) parseSSE(
@@ -154,7 +127,7 @@ func (p *Provider) parseSSE(
 
 			id := tc.ID
 			name := tc.Function.Name
-			
+
 			// parse tool arguments
 			argsMap := tc.Function.Arguments
 
@@ -167,7 +140,7 @@ func (p *Provider) parseSSE(
 				ContentIndex: contentIdx,
 				Partial:      *output,
 			})
-			
+
 			// Since args are not streamed, we simulate sending delta and then end
 			argsJSON, _ := json.Marshal(argsMap)
 			stream.Push(ai.Event{
