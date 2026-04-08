@@ -14,27 +14,31 @@ func main() {
 	ollama.Register()
 
 	// Pick any model you've pulled locally via: ollama pull <model>
-	// For thinking/reasoning, use: ollama pull deepseek-r1:8b
-	// For basic chat, use: ollama pull llama3.2
-	model := ollama.NewModel("deepseek-r1:8b",
-		ollama.WithReasoning(), // Enable reasoning/thinking mode
-		ollama.WithContextWindow(128_000),
-		ollama.WithMaxTokens(4096),
+	// For Qwen: ollama pull qwen2.5:0.5b
+	// For DeepSeek reasoning: ollama pull deepseek-r1:8b
+	// For basic chat: ollama pull llama3.2
+	model := ollama.NewModel("qwen3.5:0.8b",
+		// Don't use WithReasoning() for small models - they go on thinking rampages
+		ollama.WithContextWindow(32_000),
+		ollama.WithMaxTokens(2048),
 	)
 
 	// Build a conversation context
-	// Use a problem that benefits from reasoning
 	conv := &ai.Context{
-		SystemPrompt: "You are a helpful assistant.",
+		SystemPrompt: "You are a helpful assistant. Be concise and direct.",
 		Messages: []ai.Message{
-			ai.NewUserMessage("If a train leaves Paris at 2pm traveling at 120 km/h, and another leaves Lyon (465km away) at 2:30pm traveling at 100 km/h toward Paris, when do they meet?"),
+			ai.NewUserMessage("hi"),
 		},
 	}
 
 	fmt.Printf("Model: %s (%s)\n\n", model.Name, model.ID)
 
-	// --- Streaming example ---
-	stream, err := ai.Stream(context.Background(), model, conv, nil)
+	// --- Streaming example with thinking budget ---
+	// ThinkingBudget hard-limits thinking tokens (prevents rampage)
+	opts := &ai.StreamOptions{
+		ThinkingBudget: 100, // Max 100 tokens for thinking
+	}
+	stream, err := ai.Stream(context.Background(), model, conv, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
