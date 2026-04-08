@@ -31,8 +31,9 @@ type sseChoice struct {
 }
 
 type sseDelta struct {
-	Content   *string       `json:"content"`
-	ToolCalls []sseToolCall `json:"tool_calls,omitempty"`
+	Content          *string       `json:"content"`
+	ReasoningContent *string       `json:"reasoning_content,omitempty"` // For reasoning models (DeepSeek, Qwen, etc.)
+	ToolCalls        []sseToolCall `json:"tool_calls,omitempty"`
 }
 
 type sseToolCall struct {
@@ -76,6 +77,8 @@ func (p *Provider) parseSSE(
 
 	var currentText *ai.TextContent
 	var currentTextIdx int
+	var currentThinking *ai.ThinkingContent
+	var currentThinkingIdx int
 	activeTools := make(map[int]*activeToolCall) // keyed by SSE tool_call index
 
 	for scanner.Scan() {
@@ -124,6 +127,16 @@ func (p *Provider) parseSSE(
 		if choice.FinishReason != nil {
 			output.StopReason = mapFinishReason(*choice.FinishReason)
 
+			// Finish any open thinking block
+			if currentThinking != nil {
+				stream.Push(ai.Event{
+					Type:         ai.EventThinkingEnd,
+					ContentIndex: currentThinkingIdx,
+					Content:      currentThinking.Thinking,
+					Partial:      *output,
+				})
+				currentThinking = nil
+			}
 			// Finish any open text block
 			if currentText != nil {
 				stream.Push(ai.Event{
@@ -139,6 +152,33 @@ func (p *Provider) parseSSE(
 				finishToolCall(stream, output, tc)
 				delete(activeTools, sseIdx)
 			}
+		}
+
+		// Handle reasoning/thinking content delta (for reasoning models)
+		if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
+			delta := *choice.Delta.ReasoningContent
+
+			if currentThinking == nil {
+				// Start a new thinking block
+				currentThinking = &ai.ThinkingContent{Thinking: ""}
+				output.Content = append(output.Content, *currentThinking)
+				currentThinkingIdx = len(output.Content) - 1
+				stream.Push(ai.Event{
+					Type:         ai.EventThinkingStart,
+					ContentIndex: currentThinkingIdx,
+					Partial:      *output,
+				})
+			}
+
+			currentThinking.Thinking += delta
+			// Update in output.Content
+			output.Content[currentThinkingIdx] = *currentThinking
+			stream.Push(ai.Event{
+				Type:         ai.EventThinkingDelta,
+				ContentIndex: currentThinkingIdx,
+				Delta:        delta,
+				Partial:      *output,
+			})
 		}
 
 		// Handle text content delta
@@ -231,6 +271,14 @@ func (p *Provider) parseSSE(
 	}
 
 	// Finish any remaining open blocks
+	if currentThinking != nil {
+		stream.Push(ai.Event{
+			Type:         ai.EventThinkingEnd,
+			ContentIndex: currentThinkingIdx,
+			Content:      currentThinking.Thinking,
+			Partial:      *output,
+		})
+	}
 	if currentText != nil {
 		stream.Push(ai.Event{
 			Type:         ai.EventTextEnd,
