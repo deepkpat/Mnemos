@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"encoding/json"
 	"strings"
 
 	"mnemos/pkg/ai"
@@ -10,19 +9,25 @@ import (
 // --- Request payload types ---
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Stream      bool          `json:"stream"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Tools       []chatTool    `json:"tools,omitempty"`
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Tools    []chatTool    `json:"tools,omitempty"`
+	Format   any           `json:"format,omitempty"`
+	Options  *chatOptions  `json:"options,omitempty"`
+	Stream   bool          `json:"stream"`
+	Think    bool          `json:"think,omitempty"`
+}
+
+type chatOptions struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	NumPredict  int      `json:"num_predict,omitempty"`
+	NumCtx      int      `json:"num_ctx,omitempty"`
 }
 
 type chatMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
+	Content    string         `json:"content"`
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
 	Images     []string       `json:"images,omitempty"`
 }
 
@@ -33,8 +38,8 @@ type chatToolCall struct {
 }
 
 type chatFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 type chatTool struct {
@@ -57,15 +62,34 @@ func buildPayload(model *ai.Model, conv *ai.Context, opts *ai.StreamOptions) cha
 		Stream: true,
 	}
 
+	if model.Reasoning {
+		req.Think = true
+	}
+
+	var options *chatOptions
 	if opts != nil {
-		req.Temperature = opts.Temperature
+		if opts.Temperature != nil {
+			options = &chatOptions{Temperature: opts.Temperature}
+		}
 		if opts.MaxTokens > 0 {
-			req.MaxTokens = opts.MaxTokens
+			if options == nil {
+				options = &chatOptions{}
+			}
+			options.NumPredict = opts.MaxTokens
 		}
 	}
-	if req.MaxTokens == 0 && model.MaxTokens > 0 {
-		req.MaxTokens = model.MaxTokens
+	if options == nil && (model.MaxTokens > 0 || model.ContextWindow > 0) {
+		options = &chatOptions{}
 	}
+	if options != nil {
+		if options.NumPredict == 0 && model.MaxTokens > 0 {
+			options.NumPredict = model.MaxTokens
+		}
+		if options.NumCtx == 0 && model.ContextWindow > 0 {
+			options.NumCtx = model.ContextWindow
+		}
+	}
+	req.Options = options
 
 	// System prompt
 	if conv.SystemPrompt != "" {
@@ -130,13 +154,12 @@ func convertAssistantMessage(m ai.AssistantMessage) chatMessage {
 				texts = append(texts, block.Thinking)
 			}
 		case ai.ToolCall:
-			args, _ := json.Marshal(block.Arguments)
 			cm.ToolCalls = append(cm.ToolCalls, chatToolCall{
 				ID:   block.ID,
 				Type: "function",
 				Function: chatFunctionCall{
 					Name:      block.Name,
-					Arguments: string(args),
+					Arguments: block.Arguments,
 				},
 			})
 		}
@@ -153,8 +176,7 @@ func convertToolResultMessage(m ai.ToolResultMessage) chatMessage {
 		}
 	}
 	return chatMessage{
-		Role:       "tool",
-		Content:    strings.Join(texts, "\n"),
-		ToolCallID: m.ToolCallID,
+		Role:    "tool",
+		Content: strings.Join(texts, "\n"),
 	}
 }

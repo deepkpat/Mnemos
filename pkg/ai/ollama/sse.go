@@ -11,58 +11,34 @@ import (
 	"mnemos/pkg/ai"
 )
 
-// --- SSE response types ---
+// --- Native JSON response types ---
 
-// Ollama streams OpenAI-compatible SSE responses:
-//
-//	data: {"id":"...","choices":[{"delta":{"content":"..."}}],...}
-//	data: [DONE]
+// Ollama streams native JSON responses (newline-delimited):
+//  {"model":"...","message":{"role":"assistant","content":"..."},"done":false}
+//  {"model":"...","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop",...}
 
-type sseChunk struct {
-	ID      string      `json:"id"`
-	Choices []sseChoice `json:"choices"`
-	Usage   *sseUsage   `json:"usage,omitempty"`
+type nativeChunk struct {
+	Model           string        `json:"model"`
+	Message         nativeMessage `json:"message"`
+	Done            bool          `json:"done"`
+	DoneReason      string        `json:"done_reason,omitempty"`
+	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
+	EvalCount       int           `json:"eval_count,omitempty"`
 }
 
-type sseChoice struct {
-	Index        int      `json:"index"`
-	Delta        sseDelta `json:"delta"`
-	FinishReason *string  `json:"finish_reason"`
+type nativeMessage struct {
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	Thinking  string         `json:"thinking,omitempty"`
+	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
 }
 
-type sseDelta struct {
-	Content          *string       `json:"content"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"` // For reasoning models (DeepSeek, Qwen, etc.)
-	ToolCalls        []sseToolCall `json:"tool_calls,omitempty"`
-}
+// chatToolCall is already defined in convert.go, but we need it here for parsing
+// Unmarshaling into it should work if it's identical or we can just redefine it.
+// Actually since they are in the same package, we can use the one from convert.go.
+// Wait, convert.go defined it as chatToolCall. Let's use it.
 
-type sseToolCall struct {
-	Index    int            `json:"index"`
-	ID       string         `json:"id,omitempty"`
-	Type     string         `json:"type,omitempty"`
-	Function *sseToolCallFn `json:"function,omitempty"`
-}
-
-type sseToolCallFn struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
-type sseUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-// activeToolCall tracks a tool call being streamed.
-type activeToolCall struct {
-	id         string
-	name       string
-	argsBuffer strings.Builder
-	index      int // content index in output.Content
-}
-
-// --- SSE parsing ---
+// --- Stream parsing ---
 
 func (p *Provider) parseSSE(
 	ctx context.Context,
@@ -72,14 +48,13 @@ func (p *Provider) parseSSE(
 	output *ai.AssistantMessage,
 ) {
 	scanner := bufio.NewScanner(body)
-	// Increase buffer for potentially large SSE lines
+	// Increase buffer for potentially large lines
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var currentText *ai.TextContent
 	var currentTextIdx int
 	var currentThinking *ai.ThinkingContent
 	var currentThinkingIdx int
-	activeTools := make(map[int]*activeToolCall) // keyed by SSE tool_call index
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -90,73 +65,29 @@ func (p *Provider) parseSSE(
 		}
 
 		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk sseChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
 
-		if output.ResponseID == "" && chunk.ID != "" {
-			output.ResponseID = chunk.ID
+		var chunk nativeChunk
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
 		}
 
-		if chunk.Usage != nil {
+		// Update usage if provided (usually in the last chunk)
+		if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {
 			output.Usage = ai.Usage{
-				Input:       chunk.Usage.PromptTokens,
-				Output:      chunk.Usage.CompletionTokens,
-				TotalTokens: chunk.Usage.TotalTokens,
+				Input:       chunk.PromptEvalCount,
+				Output:      chunk.EvalCount,
+				TotalTokens: chunk.PromptEvalCount + chunk.EvalCount,
 			}
 			model.CalculateCost(&output.Usage)
 		}
 
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		choice := chunk.Choices[0]
-
-		// Handle finish reason
-		if choice.FinishReason != nil {
-			output.StopReason = mapFinishReason(*choice.FinishReason)
-
-			// Finish any open thinking block
-			if currentThinking != nil {
-				stream.Push(ai.Event{
-					Type:         ai.EventThinkingEnd,
-					ContentIndex: currentThinkingIdx,
-					Content:      currentThinking.Thinking,
-					Partial:      *output,
-				})
-				currentThinking = nil
-			}
-			// Finish any open text block
-			if currentText != nil {
-				stream.Push(ai.Event{
-					Type:         ai.EventTextEnd,
-					ContentIndex: currentTextIdx,
-					Content:      currentText.Text,
-					Partial:      *output,
-				})
-				currentText = nil
-			}
-			// Finish any open tool calls
-			for sseIdx, tc := range activeTools {
-				finishToolCall(stream, output, tc)
-				delete(activeTools, sseIdx)
-			}
-		}
-
-		// Handle reasoning/thinking content delta (for reasoning models)
-		if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
-			delta := *choice.Delta.ReasoningContent
+		// Handle thinking content delta
+		if chunk.Message.Thinking != "" {
+			delta := chunk.Message.Thinking
 
 			if currentThinking == nil {
 				// Start a new thinking block
@@ -182,8 +113,8 @@ func (p *Provider) parseSSE(
 		}
 
 		// Handle text content delta
-		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
-			delta := *choice.Delta.Content
+		if chunk.Message.Content != "" {
+			delta := chunk.Message.Content
 
 			if currentText == nil {
 				// Start a new text block
@@ -208,58 +139,55 @@ func (p *Provider) parseSSE(
 			})
 		}
 
-		// Handle tool call deltas
-		for _, tc := range choice.Delta.ToolCalls {
-			existing, ok := activeTools[tc.Index]
-			if !ok {
-				// Finish text block if one was open
-				if currentText != nil {
-					stream.Push(ai.Event{
-						Type:         ai.EventTextEnd,
-						ContentIndex: currentTextIdx,
-						Content:      currentText.Text,
-						Partial:      *output,
-					})
-					currentText = nil
-				}
-
-				// New tool call
-				id := tc.ID
-				name := ""
-				if tc.Function != nil {
-					name = tc.Function.Name
-				}
-				contentIdx := len(output.Content)
-				toolCallContent := ai.ToolCall{ID: id, Name: name, Arguments: map[string]any{}}
-				output.Content = append(output.Content, toolCallContent)
-
-				existing = &activeToolCall{id: id, name: name, index: contentIdx}
-				activeTools[tc.Index] = existing
-
+		// Handle tool calls (Ollama doesn't stream tool arguments in /api/chat natively, it sends the full objects at the end)
+		for _, tc := range chunk.Message.ToolCalls {
+			// Finish text block if one was open
+			if currentText != nil {
 				stream.Push(ai.Event{
-					Type:         ai.EventToolCallStart,
-					ContentIndex: contentIdx,
+					Type:         ai.EventTextEnd,
+					ContentIndex: currentTextIdx,
+					Content:      currentText.Text,
 					Partial:      *output,
 				})
+				currentText = nil
 			}
 
-			if tc.Function != nil {
-				if tc.Function.Name != "" {
-					existing.name = tc.Function.Name
-				}
-				if tc.Function.Arguments != "" {
-					existing.argsBuffer.WriteString(tc.Function.Arguments)
-					stream.Push(ai.Event{
-						Type:         ai.EventToolCallDelta,
-						ContentIndex: existing.index,
-						Delta:        tc.Function.Arguments,
-						Partial:      *output,
-					})
-				}
-			}
-			if tc.ID != "" {
-				existing.id = tc.ID
-			}
+			id := tc.ID
+			name := tc.Function.Name
+			
+			// parse tool arguments
+			argsMap := tc.Function.Arguments
+
+			contentIdx := len(output.Content)
+			toolCallContent := ai.ToolCall{ID: id, Name: name, Arguments: argsMap}
+			output.Content = append(output.Content, toolCallContent)
+
+			stream.Push(ai.Event{
+				Type:         ai.EventToolCallStart,
+				ContentIndex: contentIdx,
+				Partial:      *output,
+			})
+			
+			// Since args are not streamed, we simulate sending delta and then end
+			argsJSON, _ := json.Marshal(argsMap)
+			stream.Push(ai.Event{
+				Type:         ai.EventToolCallDelta,
+				ContentIndex: contentIdx,
+				Delta:        string(argsJSON),
+				Partial:      *output,
+			})
+
+			stream.Push(ai.Event{
+				Type:         ai.EventToolCallEnd,
+				ContentIndex: contentIdx,
+				ToolCall:     &toolCallContent,
+				Partial:      *output,
+			})
+		}
+
+		if chunk.Done {
+			output.StopReason = mapFinishReason(chunk.DoneReason)
+			break
 		}
 	}
 
@@ -287,10 +215,6 @@ func (p *Provider) parseSSE(
 			Partial:      *output,
 		})
 	}
-	for sseIdx, tc := range activeTools {
-		finishToolCall(stream, output, tc)
-		delete(activeTools, sseIdx)
-	}
 
 	// Emit terminal event
 	if output.StopReason == ai.StopReasonError || output.StopReason == ai.StopReasonAborted {
@@ -300,28 +224,9 @@ func (p *Provider) parseSSE(
 	}
 }
 
-func finishToolCall(stream *ai.EventStream, output *ai.AssistantMessage, tc *activeToolCall) {
-	args := parsePartialJSON(tc.argsBuffer.String())
-	toolCall := ai.ToolCall{
-		ID:        tc.id,
-		Name:      tc.name,
-		Arguments: args,
-	}
-	// Update the content block in output
-	if tc.index < len(output.Content) {
-		output.Content[tc.index] = toolCall
-	}
-	stream.Push(ai.Event{
-		Type:         ai.EventToolCallEnd,
-		ContentIndex: tc.index,
-		ToolCall:     &toolCall,
-		Partial:      *output,
-	})
-}
-
 func mapFinishReason(reason string) ai.StopReason {
 	switch reason {
-	case "stop", "end":
+	case "stop", "end", "":
 		return ai.StopReasonStop
 	case "length":
 		return ai.StopReasonLength

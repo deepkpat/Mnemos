@@ -179,7 +179,7 @@ func (p *Provider) buildRequest(
 		return nil, fmt.Errorf("ollama: marshal payload: %w", err)
 	}
 
-	url := strings.TrimRight(model.BaseURL, "/") + "/v1/chat/completions"
+	url := strings.TrimRight(model.BaseURL, "/") + "/api/chat"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: create request: %w", err)
