@@ -83,6 +83,15 @@ type Content interface {
 	ContentType() ContentType
 }
 
+// Role is the role of a message in a conversation.
+type Role string
+
+const (
+	RoleUser       Role = "user"
+	RoleAssistant  Role = "assistant"
+	RoleToolResult Role = "toolResult"
+)
+
 // --- Messages ---
 
 // UserMessage is a message from the user.
@@ -93,7 +102,7 @@ type UserMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-func (m UserMessage) Role() string { return "user" }
+func (m UserMessage) Role() Role { return RoleUser }
 
 // AssistantMessage is a response from the model.
 type AssistantMessage struct {
@@ -108,7 +117,7 @@ type AssistantMessage struct {
 	Timestamp    time.Time  `json:"timestamp"`
 }
 
-func (m AssistantMessage) Role() string { return "assistant" }
+func (m AssistantMessage) Role() Role { return RoleAssistant }
 
 // ToolResultMessage carries the result of a tool execution back to the model.
 type ToolResultMessage struct {
@@ -119,11 +128,11 @@ type ToolResultMessage struct {
 	Timestamp  time.Time `json:"timestamp"`
 }
 
-func (m ToolResultMessage) Role() string { return "toolResult" }
+func (m ToolResultMessage) Role() Role { return RoleToolResult }
 
 // Message is the interface implemented by all message types.
 type Message interface {
-	Role() string
+	Role() Role
 }
 
 // --- Usage ---
