@@ -90,6 +90,16 @@ func (p *Provider) parseSSE(
 			delta := chunk.Message.Content
 
 			if currentText == nil {
+				// Close thinking block if still open (thinking → text transition)
+				if currentThinking != nil {
+					stream.Push(ai.Event{
+						Type:         ai.EventThinkingEnd,
+						ContentIndex: currentThinkingIdx,
+						Content:      currentThinking.Thinking,
+						Partial:      *output,
+					})
+					currentThinking = nil
+				}
 				// Start a new text block
 				currentText = &ai.TextContent{Text: ""}
 				output.Content = append(output.Content, *currentText)
