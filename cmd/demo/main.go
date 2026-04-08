@@ -52,11 +52,13 @@ func main() {
 		case ai.EventThinkingDelta:
 			fmt.Print(event.Delta)
 		case ai.EventThinkingEnd:
-			fmt.Print("\n\n")
+			fmt.Print("[ThinkingEnd]")
 		case ai.EventTextStart:
 			fmt.Print("[Response] ")
 		case ai.EventTextDelta:
 			fmt.Print(event.Delta)
+		case ai.EventTextEnd:
+			fmt.Print("[ResponseEnd]")
 		case ai.EventDone:
 			fmt.Printf("\n\n--- Done (stop: %s, tokens: %d in / %d out) ---\n",
 				event.Message.StopReason,

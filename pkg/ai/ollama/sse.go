@@ -90,6 +90,17 @@ func (p *Provider) parseSSE(
 			delta := chunk.Message.Thinking
 
 			if currentThinking == nil {
+				// Finish text block if one was open
+				if currentText != nil {
+					stream.Push(ai.Event{
+						Type:         ai.EventTextEnd,
+						ContentIndex: currentTextIdx,
+						Content:      currentText.Text,
+						Partial:      *output,
+					})
+					currentText = nil
+				}
+
 				// Start a new thinking block
 				currentThinking = &ai.ThinkingContent{Thinking: ""}
 				output.Content = append(output.Content, *currentThinking)
@@ -117,6 +128,17 @@ func (p *Provider) parseSSE(
 			delta := chunk.Message.Content
 
 			if currentText == nil {
+				// Finish thinking block if one was open
+				if currentThinking != nil {
+					stream.Push(ai.Event{
+						Type:         ai.EventThinkingEnd,
+						ContentIndex: currentThinkingIdx,
+						Content:      currentThinking.Thinking,
+						Partial:      *output,
+					})
+					currentThinking = nil
+				}
+
 				// Start a new text block
 				currentText = &ai.TextContent{Text: ""}
 				output.Content = append(output.Content, *currentText)
@@ -141,6 +163,17 @@ func (p *Provider) parseSSE(
 
 		// Handle tool calls (Ollama doesn't stream tool arguments in /api/chat natively, it sends the full objects at the end)
 		for _, tc := range chunk.Message.ToolCalls {
+			// Finish thinking block if one was open
+			if currentThinking != nil {
+				stream.Push(ai.Event{
+					Type:         ai.EventThinkingEnd,
+					ContentIndex: currentThinkingIdx,
+					Content:      currentThinking.Thinking,
+					Partial:      *output,
+				})
+				currentThinking = nil
+			}
+
 			// Finish text block if one was open
 			if currentText != nil {
 				stream.Push(ai.Event{
