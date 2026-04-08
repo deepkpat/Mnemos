@@ -19,15 +19,16 @@ func main() {
 	// For basic chat: ollama pull llama3.2
 	model := ollama.NewModel("qwen3.5:0.8b",
 		// Don't use WithReasoning() for small models - they go on thinking rampages
+		ollama.WithReasoning(),
 		ollama.WithContextWindow(32_000),
 		ollama.WithMaxTokens(2048),
 	)
 
 	// Build a conversation context
 	conv := &ai.Context{
-		SystemPrompt: "You are a helpful assistant. Be concise and direct.",
+		SystemPrompt: "you are an expert coder who can solve any problem",
 		Messages: []ai.Message{
-			ai.NewUserMessage("hi"),
+			ai.NewUserMessage("implement min heap from scratch in python"),
 		},
 	}
 
