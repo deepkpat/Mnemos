@@ -259,7 +259,7 @@ func main() {
 		Provider:      "ollama",
 		BaseURL:       *baseURL,
 		MaxTokens:     4096,
-		ContextWindow: 128000,
+		ContextWindow: 32000,
 		Input:         []ai.InputModality{ai.InputText},
 	}
 
@@ -336,7 +336,7 @@ When you're done, just respond normally with your answer.`, cwd)
 
 	// Only allow one tool call iteration - the model doesn't learn from results
 	// This is a known issue with qwen3.5 - it keeps calling tools even after results
-	maxIterations := 4
+	maxIterations := 16
 
 	for iter := 0; iter < maxIterations; iter++ {
 		// Call LLM

@@ -25,10 +25,10 @@ type chatOptions struct {
 }
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	Images     []string       `json:"images,omitempty"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
+	Images    []string       `json:"images,omitempty"`
 }
 
 type chatToolCall struct {
@@ -104,10 +104,16 @@ func buildPayload(model *ai.Model, conv *ai.Context, opts *ai.StreamOptions) cha
 		switch m := msg.(type) {
 		case ai.UserMessage:
 			req.Messages = append(req.Messages, convertUserMessage(m))
+		case *ai.UserMessage:
+			req.Messages = append(req.Messages, convertUserMessage(*m))
 		case ai.AssistantMessage:
 			req.Messages = append(req.Messages, convertAssistantMessage(m))
+		case *ai.AssistantMessage:
+			req.Messages = append(req.Messages, convertAssistantMessage(*m))
 		case ai.ToolResultMessage:
 			req.Messages = append(req.Messages, convertToolResultMessage(m))
+		case *ai.ToolResultMessage:
+			req.Messages = append(req.Messages, convertToolResultMessage(*m))
 		}
 	}
 
