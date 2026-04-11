@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -169,7 +171,7 @@ func grepTool(name string, args map[string]any) (string, error) {
 	}
 
 	var matches []string
-	err := findFiles(path, func(filePath string) error {
+	err := findFilesRecursive(path, func(filePath string) error {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil
@@ -202,14 +204,15 @@ func findTool(name string, args map[string]any) (string, error) {
 		path = p
 	}
 
+	// Convert glob pattern to regex for matching
+	regexPattern := globToRegex(pattern)
+
 	var matches []string
-	err := findFiles(path, func(filePath string) error {
-		name := filePath
-		if idx := strings.LastIndex(name, "/"); idx >= 0 {
-			name = name[idx+1:]
-		}
-		// Simple glob matching
-		if strings.Contains(name, pattern) {
+	err := findFilesRecursive(path, func(filePath string) error {
+		// Get just the filename
+		name := filepath.Base(filePath)
+		// Match against the pattern
+		if matchesPattern(name, regexPattern) {
 			matches = append(matches, filePath)
 		}
 		return nil
@@ -224,8 +227,46 @@ func findTool(name string, args map[string]any) (string, error) {
 	return strings.Join(matches, "\n"), nil
 }
 
+// globToRegex converts a glob pattern to a regex pattern
+func globToRegex(pattern string) string {
+	// Handle ** for recursive matching
+	pattern = strings.ReplaceAll(pattern, "**/", ".*/")
+	pattern = strings.ReplaceAll(pattern, "**", ".*")
+
+	// Escape special regex chars except glob wildcards
+	var result strings.Builder
+	for _, c := range pattern {
+		switch c {
+		case '*':
+			result.WriteString(".*")
+		case '?':
+			result.WriteByte('.')
+		case '.', '(', ')', '+', '^', '$', '[', ']', '{', '}', '|', '\\':
+			result.WriteString("\\")
+			result.WriteRune(c)
+		default:
+			result.WriteRune(c)
+		}
+	}
+	return result.String()
+}
+
+// matchesPattern checks if a filename matches the regex pattern
+func matchesPattern(name string, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	// For exact match (no wildcards), do simple string matching
+	if !strings.Contains(pattern, ".*") && !strings.Contains(pattern, ".") {
+		return strings.Contains(name, pattern)
+	}
+	// Use regex for patterns with wildcards
+	matched, err := regexp.MatchString("^"+pattern+"$", name)
+	return err == nil && matched
+}
+
 // Helper function to recursively find files
-func findFiles(dir string, fn func(string) error) error {
+func findFilesRecursive(dir string, fn func(string) error) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -233,9 +274,13 @@ func findFiles(dir string, fn func(string) error) error {
 	for _, e := range entries {
 		path := dir + "/" + e.Name()
 		if e.IsDir() {
-			findFiles(path, fn)
+			if err := findFilesRecursive(path, fn); err != nil {
+				return err
+			}
 		} else {
-			fn(path)
+			if err := fn(path); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -293,28 +338,9 @@ func main() {
 }
 
 func sendPromptWithTools(ctx context.Context, model *ai.Model, cwd string, prompt string, tools map[string]ai.Tool, handlers map[string]ToolHandler) {
-	// Build system prompt - be very explicit about tool usage
-	systemPrompt := fmt.Sprintf(`You are a helpful coding assistant.
-
-## Available Tools
-You can call these tools when needed:
-- bash: Execute shell commands
-- read: Read file contents
-- ls: List directory contents
-- grep: Search file contents
-- find: Find files
-
-Working directory: %s
-
-## Important Rules
-1. After calling a tool and getting the result, provide your FINAL answer to the user
-2. Do NOT call more tools unless you need additional information
-3. If the tool result answers the question, STOP and respond to the user
-4. Only call another tool if you need MORE information than you already have
-
-## Response Format
-When you need a tool, use: {"name": "tool_name", "arguments": {"arg": "value"}}
-When you're done, just respond normally with your answer.`, cwd)
+	// Optimized system prompt for small models (qwen3.5:0.8b)
+	// Key: concise, one-tool-per-response, explicit stop condition
+	systemPrompt := BuildSystemPrompt(cwd)
 
 	userMsg := ai.NewUserMessage(prompt)
 
@@ -362,10 +388,13 @@ When you're done, just respond normally with your answer.`, cwd)
 				hasToolCall = true
 				fmt.Printf("\n→ Calling tool: %s\n", ct.Name)
 
-				// Get arguments
+				// Print tool arguments
 				args := make(map[string]any)
 				for k, v := range ct.Arguments {
 					args[k] = v
+				}
+				if len(args) > 0 {
+					fmt.Printf("  Args: %+v\n", args)
 				}
 
 				// Execute tool
@@ -415,17 +444,8 @@ When you're done, just respond normally with your answer.`, cwd)
 }
 
 func runInteractive(ctx context.Context, model *ai.Model, cwd string, tools map[string]ai.Tool, handlers map[string]ToolHandler) {
-	systemPrompt := fmt.Sprintf(`You are a helpful coding assistant.
-
-## Available Tools
-- bash, read, ls, grep, find
-
-## Rules
-1. After getting tool results, provide your FINAL answer
-2. Do NOT call more tools unless you need more information
-3. If the answer is complete, STOP
-
-Working directory: %s`, cwd)
+	// Shorter version for interactive mode
+	systemPrompt := BuildInteractivePrompt(cwd)
 
 	conv := &ai.Context{
 		Messages: []ai.Message{
@@ -507,6 +527,10 @@ Working directory: %s`, cwd)
 					args := make(map[string]any)
 					for k, v := range ct.Arguments {
 						args[k] = v
+					}
+					// Print tool arguments
+					if len(args) > 0 {
+						fmt.Printf("  Args: %+v\n", args)
 					}
 
 					handler, ok := handlers[ct.Name]

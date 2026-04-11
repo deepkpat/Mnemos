@@ -68,7 +68,7 @@ func ReadToolDefinition() ToolDefinition {
 				},
 				"offset": map[string]interface{}{
 					"type":        "integer",
-					"description": "Line number to start from (0-based)",
+					"description": "Line number to start from (1-based, first line is 1)",
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
@@ -120,7 +120,7 @@ func WriteToolDefinition() ToolDefinition {
 func EditToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "edit",
-		Description: "Applies edits to a file using ed-style diff syntax.",
+		Description: "Edits a file by replacing text with new content.",
 		Label:       "Edit",
 		Parameters: map[string]interface{}{
 			"type": "object",
@@ -129,16 +129,30 @@ func EditToolDefinition() ToolDefinition {
 					"type":        "string",
 					"description": "Path to the file to edit",
 				},
-				"diff": map[string]interface{}{
-					"type":        "string",
-					"description": "Ed-style diff specifying changes",
+				"edits": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"oldText": map[string]interface{}{
+								"type":        "string",
+								"description": "The text to find and replace (must match exactly)",
+							},
+							"newText": map[string]interface{}{
+								"type":        "string",
+								"description": "The replacement text",
+							},
+						},
+						"required": []string{"oldText", "newText"},
+					},
+					"description": "Array of edits to apply",
 				},
 			},
-			"required": []string{"path", "diff"},
+			"required": []string{"path", "edits"},
 		},
-		Details: "Uses ed commands: a (append), i (insert), c (change), d (delete). Line numbers are 1-based.",
+		Details: "Each edit replaces oldText with newText. Text must match exactly including whitespace and newlines.",
 		Examples: []ToolExample{
-			{Input: `{"path": "/src/main.ts", "diff": "5a\n  console.log('new line')\n."}`, Output: "Appended after line 5"},
+			{Input: `{"path": "/src/main.ts", "edits": [{"oldText": "const x = 1;", "newText": "const x = 2;"}]}`, Output: "Replaced text"},
 		},
 	}
 }
@@ -199,6 +213,10 @@ func GrepToolDefinition() ToolDefinition {
 					"type":        "string",
 					"description": "File pattern to include (e.g., *.ts)",
 				},
+				"glob": map[string]interface{}{
+					"type":        "string",
+					"description": "File pattern to include (e.g., *.ts). Alias for include.",
+				},
 				"exclude": map[string]interface{}{
 					"type":        "string",
 					"description": "File pattern to exclude",
@@ -242,6 +260,10 @@ func FindToolDefinition() ToolDefinition {
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "Name pattern (glob)",
+				},
+				"pattern": map[string]interface{}{
+					"type":        "string",
+					"description": "Name pattern (glob). Alias for name.",
 				},
 				"maxDepth": map[string]interface{}{
 					"type":        "integer",
