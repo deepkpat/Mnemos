@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"mnemos/pkg/ai"
 )
 
 var (
@@ -46,12 +48,9 @@ type MessageEntry struct {
 // EntryType returns the entry type.
 func (e *MessageEntry) EntryType() string { return e.EntryType_ }
 
-// ContentBlock is either text or image content.
-type ContentBlock struct {
-	Type string `json:"type"` // "text" or "image"
-	Text string `json:"text,omitempty"`
-	Data string `json:"data,omitempty"` // base64 for images
-}
+// ContentBlock maps to ai.Content for compatibility.
+// Use ai.TextContent, ai.ImageContent, ai.ToolCall directly.
+type ContentBlock = ai.Content
 
 // ToolResultEntry represents a tool execution result.
 type ToolResultEntry struct {
@@ -253,6 +252,11 @@ func DefaultSessionOptions() *SessionOptions {
 // generateSessionID generates a unique session ID.
 func generateSessionID() string {
 	return fmt.Sprintf("%d", time.Now().UnixMilli())
+}
+
+// generateID generates a unique entry ID (8 chars).
+func generateID() string {
+	return fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFF)
 }
 
 // parseEntries parses session entries from JSON data.
