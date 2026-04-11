@@ -79,15 +79,43 @@ func DefaultTools() (map[string]ai.Tool, map[string]ToolHandler) {
 				"required": []string{"pattern"},
 			},
 		},
+		"write": {
+			Name:        "write",
+			Description: "Write content to a file. For existing files, shows diff by default. Use apply=true to overwrite.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":    map[string]any{"type": "string", "description": "Path to the file to write"},
+					"content": map[string]any{"type": "string", "description": "Content to write to the file"},
+					"apply":   map[string]any{"type": "boolean", "description": "Apply write (default: false for existing files, always for new files)"},
+				},
+				"required": []string{"path", "content"},
+			},
+		},
+		"edit": {
+			Name:        "edit",
+			Description: "Edit a file by replacing exact text. Changes are applied automatically.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":    map[string]any{"type": "string", "description": "Path to the file to edit"},
+					"oldText": map[string]any{"type": "string", "description": "Exact text to find and replace"},
+					"newText": map[string]any{"type": "string", "description": "Replacement text"},
+				},
+				"required": []string{"path", "oldText", "newText"},
+			},
+		},
 	}
 
 	// Tool handlers
 	handlers := map[string]ToolHandler{
-		"bash": bashTool,
-		"read": readTool,
-		"ls":   lsTool,
-		"grep": grepTool,
-		"find": findTool,
+		"bash":  bashTool,
+		"read":  readTool,
+		"ls":    lsTool,
+		"grep":  grepTool,
+		"find":  findTool,
+		"write": writeTool,
+		"edit":  editTool,
 	}
 
 	return tools, handlers
@@ -284,6 +312,196 @@ func findFilesRecursive(dir string, fn func(string) error) error {
 		}
 	}
 	return nil
+}
+
+// writeTool writes content to a file. For existing files, shows diff by default.
+// Set apply=true to overwrite immediately.
+func writeTool(name string, args map[string]any) (string, error) {
+	path, ok := args["path"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing path argument")
+	}
+	content, ok := args["content"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing content argument")
+	}
+
+	// Check if apply flag is set
+	apply := false
+	if a, ok := args["apply"].(bool); ok {
+		apply = a
+	}
+
+	// Create parent directories if needed
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directories: %v", err)
+	}
+
+	// Check if file exists
+	oldData, err := os.ReadFile(path)
+	if err != nil {
+		// File doesn't exist - create it
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return "", fmt.Errorf("failed to write file: %v", err)
+		}
+		return fmt.Sprintf("Created %s", path), nil
+	}
+
+	// File exists - compute diff
+	oldLines := strings.Split(string(oldData), "\n")
+	newLines := strings.Split(content, "\n")
+	diff := computeDiff(oldLines, newLines, path)
+
+	if diff == "" {
+		return fmt.Sprintf("No changes: %s", path), nil
+	}
+
+	// If apply=false (default), show diff
+	if !apply {
+		return fmt.Sprintf("File exists - diff (use apply=true to overwrite):\n\n%s", diff), nil
+	}
+
+	// Apply the write
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %v", err)
+	}
+
+	return fmt.Sprintf("Overwrote %s:\n\n%s", path, diff), nil
+}
+
+// computeDiff generates a simple unified diff-style output
+func computeDiff(oldLines, newLines []string, path string) string {
+	var buf strings.Builder
+
+	oldSet := make(map[string]bool)
+	for _, line := range oldLines {
+		oldSet[line] = true
+	}
+
+	// Find added lines (in new but not in old)
+	var added []string
+	for _, line := range newLines {
+		if !oldSet[line] {
+			added = append(added, line)
+		}
+	}
+
+	// Find removed lines (in old but not in new)
+	newSet := make(map[string]bool)
+	for _, line := range newLines {
+		newSet[line] = true
+	}
+
+	var removed []string
+	for _, line := range oldLines {
+		if !newSet[line] {
+			removed = append(removed, line)
+		}
+	}
+
+	// Generate diff-like output
+	if len(removed) > 0 {
+		buf.WriteString("--- Removed\n")
+		for i, line := range removed {
+			buf.WriteString(fmt.Sprintf("- %s\n", line))
+			if i >= 3 && len(removed) > 4 {
+				buf.WriteString(fmt.Sprintf("  ... (%d more removed)", len(removed)-3))
+				break
+			}
+		}
+	}
+
+	if len(added) > 0 {
+		buf.WriteString("\n+++ Added\n")
+		for i, line := range added {
+			buf.WriteString(fmt.Sprintf("+ %s\n", line))
+			if i >= 3 && len(added) > 4 {
+				buf.WriteString(fmt.Sprintf("  ... (%d more added)", len(added)-3))
+				break
+			}
+		}
+	}
+
+	return buf.String()
+}
+
+// editTool edits a file by showing diff and applying automatically.
+// Ensures the file is within the current working directory.
+func editTool(name string, args map[string]any) (string, error) {
+	path, ok := args["path"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing path argument")
+	}
+	oldText, ok := args["oldText"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing oldText argument")
+	}
+	newText, ok := args["newText"].(string)
+	if !ok {
+		return "", fmt.Errorf("missing newText argument")
+	}
+
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get working directory: %v", err)
+	}
+
+	// Resolve path to absolute
+	absPath := path
+	if !filepath.IsAbs(path) {
+		absPath, err = filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve path: %v", err)
+		}
+	}
+
+	// Normalize both paths for comparison
+	cwdAbs, _ := filepath.Abs(cwd)
+	absPathClean := filepath.Clean(absPath)
+	cwdClean := filepath.Clean(cwdAbs)
+
+	// Check if file is within current working directory
+	if !strings.HasPrefix(absPathClean, cwdClean+string(filepath.Separator)) && absPathClean != cwdClean {
+		return "", fmt.Errorf("file must be within working directory (%s): %s", cwd, path)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("file does not exist: %s", path)
+	}
+
+	// Read the file
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %v", err)
+	}
+	content := string(data)
+
+	// Check if oldText exists
+	if !strings.Contains(content, oldText) {
+		return "", fmt.Errorf("oldText not found in file")
+	}
+
+	// Compute what new content would look like
+	newContent := strings.Replace(content, oldText, newText, 1)
+
+	// Generate diff between old and new
+	oldLines := strings.Split(content, "\n")
+	newLines := strings.Split(newContent, "\n")
+	diff := computeDiff(oldLines, newLines, absPath)
+
+	if diff == "" {
+		return fmt.Sprintf("No changes: %s", absPath), nil
+	}
+
+	// Apply the changes automatically
+	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %v", err)
+	}
+
+	return fmt.Sprintf("Applied edit to %s:\n\n%s", absPath, diff), nil
 }
 
 func main() {
@@ -500,8 +718,8 @@ func runInteractive(ctx context.Context, model *ai.Model, cwd string, tools map[
 
 		conv.Messages = append(conv.Messages, ai.NewUserMessage(input))
 
-		// Same limit as single prompt - model over-calls tools
-		maxIterations := 1
+		// Allow multiple turns for interactive mode so agent can continue after tool results
+		maxIterations := 8
 		for iter := 0; iter < maxIterations; iter++ {
 			result, err := ai.Complete(ctx, model, conv, nil)
 			if err != nil {
