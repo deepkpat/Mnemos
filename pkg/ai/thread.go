@@ -1,0 +1,8 @@
+package ai
+
+// Thread is the full conversation state sent to the LLM
+type Thread struct {
+	SystemPrompt string    `json:"system_prompt,omitempty"`
+	Messages     []Message `json:"messages"`
+	Tools        []Tool    `json:"tools,omitempty"`
+}
