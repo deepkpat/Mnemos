@@ -60,3 +60,29 @@ func (m ToolResultMessage) Role() Role { return RoleToolResult }
 type Message interface {
 	Role() Role
 }
+
+// NewUserMessage creates a UserMessage from a plain string.
+func NewUserMessage(text string) UserMessage {
+	return UserMessage{
+		Content:   []Content{Text{Text: text}},
+		Timestamp: time.Now(),
+	}
+}
+
+// NewAssistantError creates an AssistantMessage representing an error.
+func NewAssistantError(model *Model, err error) AssistantMessage {
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	return AssistantMessage{
+		Content:      nil,
+		API:          model.API,
+		Provider:     model.Provider,
+		Model:        model.ID,
+		Usage:        ZeroUsage(),
+		StopReason:   StopReasonError,
+		ErrorMessage: errMsg,
+		Timestamp:    time.Now(),
+	}
+}
