@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // Tool defines a function the model can call
 type Tool struct {

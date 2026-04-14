@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // ContentType describes the type of message content
 type ContentType string

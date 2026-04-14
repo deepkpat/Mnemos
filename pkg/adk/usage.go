@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // Usage tracks token consumption and associated costs
 type Usage struct {

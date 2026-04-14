@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // InputModality describes the type of input model accepts
 type Modality string

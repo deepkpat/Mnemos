@@ -1,9 +1,10 @@
-package ai
+package adk
 
 // ThinkingLevel controls how much reasoning effort the model should use
 type ThinkingLevel string
 
 const (
+	ThinkingNone    ThinkingLevel = "none"
 	ThinkingMinimal ThinkingLevel = "minimal"
 	ThinkingLow     ThinkingLevel = "low"
 	ThinkingMedium  ThinkingLevel = "medium"

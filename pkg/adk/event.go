@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // EventType describe the type of event in a stream
 type EventType string

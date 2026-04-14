@@ -1,4 +1,4 @@
-package ai
+package adk
 
 // Thread is the full conversation state sent to the LLM
 type Thread struct {
