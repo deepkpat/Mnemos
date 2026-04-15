@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -22,6 +23,7 @@ var (
 	sessionDir   = flag.String("session", "./sessions", "Session directory")
 	systemPrompt = flag.String("system", "", "System prompt")
 	agentTools   []agent.AgentTool
+	maxTurns     = 10
 )
 
 func main() {
@@ -37,6 +39,7 @@ func main() {
 
 	// Create model
 	model := ollama.NewModel(*modelName,
+		ollama.WithReasoning(),
 		ollama.WithContextWindow(32_000),
 		ollama.WithMaxTokens(4096),
 	)
@@ -44,8 +47,19 @@ func main() {
 	// Set up system prompt if provided
 	sysPrompt := *systemPrompt
 	if sysPrompt == "" {
-		sysPrompt = `You are an expert coding assistant. You have tools to read, write, edit files and run commands.
-When you write code, make it clean and readable. Explain your thinking before coding.`
+		sysPrompt = `You are an expert coding assistant living in ` + getCwd() + `.
+
+## RULES
+1. ONE tool per response.
+2. After tool execution, provide a final answer based on the result.
+3. Edits must match EXACT text.
+
+## TOOLS
+- read({"path": "file.go"}) - read file
+- write({"path": "file.go", "content": "..."}) - write file
+- edit({"path": "file.go", "oldText": "...", "newText": "..."}) - replace text
+- ls({"path": "."}) - list directory
+- bash({"command": "go run main.go"}) - run command`
 	}
 
 	// Create session manager
@@ -93,39 +107,6 @@ When you write code, make it clean and readable. Explain your thinking before co
 		os.Exit(0)
 	}()
 
-	// Subscribe to events for streaming display
-	ag.Subscribe(func(e agent.AgentEvent) {
-		switch e.Type {
-		case agent.EventMessageStart:
-			if msg, ok := e.Message.(*agent.AssistantAgentMessage); ok {
-				fmt.Printf("\n[Assistant]\n")
-				for _, c := range msg.Content {
-					if tc, ok := c.(ai.TextContent); ok {
-						fmt.Printf("%s", tc.Text)
-					}
-				}
-			}
-		case agent.EventMessageUpdate:
-			if msg, ok := e.Message.(*agent.AssistantAgentMessage); ok {
-				for _, c := range msg.Content {
-					if tc, ok := c.(ai.TextContent); ok {
-						fmt.Printf("%s", tc.Text)
-					}
-				}
-			}
-		case agent.EventMessageEnd:
-			fmt.Println()
-		case agent.EventToolExecutionStart:
-			fmt.Printf("\n[Tool: %s] ", e.ToolName)
-		case agent.EventToolExecutionEnd:
-			fmt.Printf(" -> done\n")
-		case agent.EventTurnStart:
-			// Turn started
-		case agent.EventTurnEnd:
-			// Turn ended
-		}
-	})
-
 	// Process prompts
 	for {
 		fmt.Print("> ")
@@ -155,84 +136,130 @@ When you write code, make it clean and readable. Explain your thinking before co
 		sm.AppendMessage("user", []ai.Content{ai.TextContent{Text: input}})
 
 		// Run agent with streaming
-		err := runAgentLoopStreaming(ctx, ag, sm, sysPrompt)
+		err := runAgentLoopStreaming(ctx, ag, sm)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		}
 	}
 }
 
-func runAgentLoopStreaming(ctx context.Context, a *agent.Agent, sm *coding_agent.SessionManager, systemPrompt string) error {
-	// Get session entries and convert to LLM messages
-	entries := sm.GetEntries()
-	messages := convertToLLM(entries)
+func runAgentLoopStreaming(ctx context.Context, a *agent.Agent, sm *coding_agent.SessionManager) error {
+	for turn := 0; turn < maxTurns; turn++ {
+		// Get session entries and convert to LLM messages
+		entries := sm.GetEntries()
+		messages := convertToLLM(entries)
 
-	// Convert agent tools to AI tools
-	llmTools := convertTools(agentTools)
+		// Convert agent tools to AI tools
+		llmTools := convertTools(agentTools)
 
-	conv := &ai.Context{
-		SystemPrompt: systemPrompt,
-		Messages:     messages,
-		Tools:        llmTools,
-	}
+		// Get initial state for sys prompt (could change if we want)
+		sysPrompt := a.State().SystemPrompt
 
-	stream, err := ai.Stream(ctx, a.Model(), conv, &ai.StreamOptions{})
-	if err != nil {
-		return err
-	}
+		conv := &ai.Context{
+			SystemPrompt: sysPrompt,
+			Messages:     messages,
+			Tools:        llmTools,
+		}
 
-	for event := range stream.Events() {
-		switch event.Type {
-		case ai.EventStart:
-			// Response started
-		case ai.EventTextStart, ai.EventTextDelta:
-			fmt.Print(event.Delta)
-		case ai.EventThinkingStart, ai.EventThinkingDelta:
-			// Thinking - could display differently
-			fmt.Print(event.Delta)
-		case ai.EventThinkingEnd:
-			fmt.Println()
-		case ai.EventToolCallEnd:
-			// Execute tool call
-			if event.ToolCall != nil {
-				tc := event.ToolCall
-				result := executeToolCall(*tc)
-				sm.AppendToolResult(tc.ID, tc.Name, result.Content, result.IsError)
+		stream, err := ai.Stream(ctx, a.Model(), conv, &ai.StreamOptions{
+			ThinkingBudget: 500,
+		})
+		if err != nil {
+			return err
+		}
+
+		var toolCalls []ai.ToolCall
+		var assistantContent []ai.Content
+
+		fmt.Printf("\n[Turn %d]\n", turn+1)
+
+		for event := range stream.Events() {
+			switch event.Type {
+			case ai.EventThinkingStart:
+				fmt.Print("\n[Thinking]\n")
+			case ai.EventThinkingDelta:
+				fmt.Print(event.Delta)
+			case ai.EventThinkingEnd:
+				fmt.Print("\n")
+
+			case ai.EventTextStart:
+				fmt.Print("\n[Assistant]\n")
+			case ai.EventTextDelta:
+				fmt.Print(event.Delta)
+			case ai.EventTextEnd:
+				fmt.Print("\n")
+
+			case ai.EventToolCallStart:
+				// Start of a tool call
+			case ai.EventToolCallEnd:
+				if event.ToolCall != nil {
+					toolCalls = append(toolCalls, *event.ToolCall)
+				}
+
+			case ai.EventDone:
+				assistantContent = event.Message.Content
+				sm.AppendMessage("assistant", assistantContent)
+
+				usage := event.Message.Usage
+				if usage.Input > 0 || usage.Output > 0 {
+					fmt.Printf("\n[Usage: %d in / %d out]\n", usage.Input, usage.Output)
+				}
+
+			case ai.EventError:
+				return fmt.Errorf("ai error: %s", event.Error.ErrorMessage)
 			}
-		case ai.EventDone:
-			// Save assistant message
-			sm.AppendMessage("assistant", event.Message.Content)
-			fmt.Printf("\n[tokens: %d in / %d out]\n",
-				event.Message.Usage.Input,
-				event.Message.Usage.Output,
-			)
+		}
+
+		// If no tool calls, we're done with the interaction
+		if len(toolCalls) == 0 {
 			return nil
-		case ai.EventError:
-			return fmt.Errorf("error: %s", event.Error.ErrorMessage)
+		}
+
+		// Execute tool calls and append results
+		for _, tc := range toolCalls {
+			fmt.Printf("\n[Tool: %s]\nArgs: %v\n", tc.Name, tc.Arguments)
+			result := executeToolCall(tc)
+			sm.AppendToolResult(tc.ID, tc.Name, result.Content, result.IsError)
+
+			// Print short summary of result
+			resText := ""
+			for _, c := range result.Content {
+				if t, ok := c.(ai.TextContent); ok {
+					resText += t.Text
+				}
+			}
+			if len(resText) > 200 {
+				resText = resText[:200] + "..."
+			}
+			fmt.Printf("Result: %s\n", resText)
 		}
 	}
 
-	return nil
+	return fmt.Errorf("reached maximum turns (%d)", maxTurns)
 }
 
 func createTools() []agent.AgentTool {
 	return []agent.AgentTool{
 		&codingAgentTool{
-			name:        "Read",
-			description: "Read a file from the filesystem",
+			name:        "read",
+			description: "Read a file and return its content",
 			label:       "Read",
 			params: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Path to file"},
+					"path": map[string]any{"type": "string", "description": "Path to the file"},
 				},
 				"required": []any{"path"},
 			},
 			run: func(args map[string]any) ([]ai.Content, error) {
 				path, _ := args["path"].(string)
+				// Resolve path relative to CWD if not absolute
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(getCwd(), path)
+				}
 				data, err := os.ReadFile(path)
 				if err != nil {
-					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error: %v", err)}}, nil
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error reading file: %v", err)}}, nil
 				}
 				content := string(data)
 				// Truncate if too large
@@ -243,81 +270,130 @@ func createTools() []agent.AgentTool {
 			},
 		},
 		&codingAgentTool{
-			name:        "Write",
-			description: "Write content to a file",
+			name:        "write",
+			description: "Write full content to a file",
 			label:       "Write",
 			params: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path":    map[string]any{"type": "string"},
-					"content": map[string]any{"type": "string"},
+					"path":    map[string]any{"type": "string", "description": "Path to file"},
+					"content": map[string]any{"type": "string", "description": "Full file content"},
 				},
 				"required": []any{"path", "content"},
 			},
 			run: func(args map[string]any) ([]ai.Content, error) {
 				path, _ := args["path"].(string)
 				content, _ := args["content"].(string)
+
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(getCwd(), path)
+				}
+
+				// Create parent directories
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error creating directories: %v", err)}}, nil
+				}
+
 				err := os.WriteFile(path, []byte(content), 0644)
 				if err != nil {
-					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error: %v", err)}}, nil
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error writing file: %v", err)}}, nil
 				}
 				return []ai.Content{ai.TextContent{Text: "File written successfully"}}, nil
 			},
 		},
 		&codingAgentTool{
-			name:        "Edit",
-			description: "Edit a file by replacing text",
+			name:        "edit",
+			description: "Edit a file by replacing oldText with newText",
 			label:       "Edit",
 			params: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path":      map[string]any{"type": "string"},
-					"oldString": map[string]any{"type": "string"},
-					"newString": map[string]any{"type": "string"},
+					"path":    map[string]any{"type": "string", "description": "Path to file"},
+					"oldText": map[string]any{"type": "string", "description": "Exact text to replace"},
+					"newText": map[string]any{"type": "string", "description": "New replacement text"},
 				},
-				"required": []any{"path", "oldString"},
+				"required": []any{"path", "oldText", "newText"},
 			},
 			run: func(args map[string]any) ([]ai.Content, error) {
 				path, _ := args["path"].(string)
-				oldStr, _ := args["oldString"].(string)
-				newStr, _ := args["newString"].(string)
+				oldStr, _ := args["oldText"].(string)
+				newStr, _ := args["newText"].(string)
+
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(getCwd(), path)
+				}
 
 				data, err := os.ReadFile(path)
 				if err != nil {
-					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error: %v", err)}}, nil
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error reading file: %v", err)}}, nil
 				}
 
 				content := string(data)
 				if !strings.Contains(content, oldStr) {
-					return []ai.Content{ai.TextContent{Text: "Old string not found in file"}}, nil
+					return []ai.Content{ai.TextContent{Text: "Error: oldText not found in file. Make sure it matches exactly including whitespace."}}, nil
 				}
 
 				content = strings.Replace(content, oldStr, newStr, 1)
 				err = os.WriteFile(path, []byte(content), 0644)
 				if err != nil {
-					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error: %v", err)}}, nil
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error writing file: %v", err)}}, nil
 				}
 				return []ai.Content{ai.TextContent{Text: "File edited successfully"}}, nil
 			},
 		},
 		&codingAgentTool{
-			name:        "Bash",
-			description: "Run a shell command",
+			name:        "bash",
+			description: "Run a shell command and return its output",
 			label:       "Bash",
 			params: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"command": map[string]any{"type": "string"},
+					"command": map[string]any{"type": "string", "description": "The command to run"},
 				},
 				"required": []any{"command"},
 			},
 			run: func(args map[string]any) ([]ai.Content, error) {
-				cmd, _ := args["command"].(string)
-				output, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+				cmdStr, _ := args["command"].(string)
+				c := exec.Command("sh", "-c", cmdStr)
+				c.Dir = getCwd()
+				output, err := c.CombinedOutput()
 				if err != nil {
-					return []ai.Content{ai.TextContent{Text: string(output) + "\nError: " + err.Error()}}, nil
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Output: %s\nError: %v", string(output), err)}}, nil
 				}
 				return []ai.Content{ai.TextContent{Text: string(output)}}, nil
+			},
+		},
+		&codingAgentTool{
+			name:        "ls",
+			description: "List directory contents",
+			label:       "List",
+			params: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string", "description": "Directory to list"},
+				},
+			},
+			run: func(args map[string]any) ([]ai.Content, error) {
+				path, _ := args["path"].(string)
+				if path == "" {
+					path = "."
+				}
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(getCwd(), path)
+				}
+				entries, err := os.ReadDir(path)
+				if err != nil {
+					return []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error: %v", err)}}, nil
+				}
+				var names []string
+				for _, e := range entries {
+					if e.IsDir() {
+						names = append(names, e.Name()+"/")
+					} else {
+						names = append(names, e.Name())
+					}
+				}
+				return []ai.Content{ai.TextContent{Text: strings.Join(names, "\n")}}, nil
 			},
 		},
 	}
@@ -373,15 +449,21 @@ func executeToolCall(tc ai.ToolCall) agent.ToolResultAgentMessage {
 func convertToLLM(entries []coding_agent.SessionEntry) []ai.Message {
 	result := []ai.Message{}
 	for _, e := range entries {
-		if me, ok := e.(*coding_agent.MessageEntry); ok {
-			switch me.Role {
+		switch entry := e.(type) {
+		case *coding_agent.MessageEntry:
+			switch entry.Role {
 			case "user":
-				result = append(result, ai.UserMessage{Content: me.Content})
+				result = append(result, ai.UserMessage{Content: entry.Content})
 			case "assistant":
-				result = append(result, ai.AssistantMessage{Content: me.Content})
-			case "toolResult":
-				result = append(result, ai.ToolResultMessage{Content: me.Content})
+				result = append(result, ai.AssistantMessage{Content: entry.Content})
 			}
+		case *coding_agent.ToolResultEntry:
+			result = append(result, ai.ToolResultMessage{
+				ToolCallID: entry.ToolCallID,
+				ToolName:   entry.ToolName,
+				Content:    entry.Content,
+				IsError:    entry.IsError,
+			})
 		}
 	}
 	return result
@@ -406,10 +488,11 @@ func printHelp() {
   /exit    - Exit the program
 
 Tools available:
-  Read <path>    - Read a file
-  Write <path> <content> - Write a file
-  Edit <path> <old> <new> - Edit a file (replace old with new)
-  Bash <command> - Run a shell command`)
+  read <path>
+  write <path> <content>
+  edit <path> <oldText> <newText>
+  ls <path>
+  bash <command>`)
 }
 
 func getCwd() string {
