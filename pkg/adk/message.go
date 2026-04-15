@@ -86,3 +86,14 @@ func NewAssistantError(model *Model, err error) AssistantMessage {
 		Timestamp:    time.Now(),
 	}
 }
+
+// NewToolResultMessage creates a ToolResultMessage
+func NewToolResultMessage(toolCallID, toolName string, content []Content, isError bool) *ToolResultMessage {
+	return &ToolResultMessage{
+		ToolCallID: toolCallID,
+		ToolName:   toolName,
+		Content:    content,
+		IsError:    isError,
+		Timestamp:  time.Now(),
+	}
+}
