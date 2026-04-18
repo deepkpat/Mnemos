@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"time"
 
 	"mnemos/pkg/ai"
@@ -223,6 +224,90 @@ type AfterToolCallResult struct {
 	IsError *bool
 }
 
+// ContextDistiller transforms a message list before sending to the LLM.
+// It can be used to compress, filter, or otherwise process messages.
+type ContextDistiller interface {
+	Distill(messages []AgentMessage) []AgentMessage
+}
+
+// IdentityContextDistiller is a no-op distiller that returns messages unchanged.
+type IdentityContextDistiller struct{}
+
+func (IdentityContextDistiller) Distill(messages []AgentMessage) []AgentMessage {
+	return messages
+}
+
+// SimpleDistiller removes read/write/edit tool calls and replaces them with
+// the actual file contents.
+type SimpleDistiller struct {
+	// FileReader is an optional function to read file contents.
+	// If not set, the distiller will just collect paths without reading.
+	FileReader func(path string) (string, error)
+}
+
+// toolNames to filter
+var simpleDistillerFilterToolNames = map[string]bool{
+	"read":  true,
+	"write": true,
+	"edit":  true,
+}
+
+func (d SimpleDistiller) Distill(messages []AgentMessage) []AgentMessage {
+	// First pass: filter tool result messages
+	result := make([]AgentMessage, 0, len(messages))
+	modifiedFiles := make(map[string]bool) // path -> true
+
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case *ToolResultAgentMessage:
+			// Skip read, write, edit tool results
+			if simpleDistillerFilterToolNames[m.ToolName] {
+				continue
+			}
+			result = append(result, m)
+		case *AssistantAgentMessage:
+			// Extract file paths from tool calls
+			for _, c := range m.Content {
+				if tc, ok := c.(ai.ToolCall); ok {
+					if simpleDistillerFilterToolNames[tc.Name] {
+						if path, ok := tc.Arguments["path"].(string); ok {
+							modifiedFiles[path] = true
+						}
+					}
+				}
+			}
+			result = append(result, m)
+		default:
+			result = append(result, m)
+		}
+	}
+
+	// If we have a file reader and modified files, read them and add as user messages
+	if d.FileReader != nil && len(modifiedFiles) > 0 {
+		for path := range modifiedFiles {
+			content, err := d.FileReader(path)
+			var text string
+			if err != nil {
+				text = fmt.Sprintf("Error reading file: %v", err)
+			} else {
+				// Truncate if too large
+				if len(content) > 50*1024 {
+					text = content[:50*1024] + "\n... [truncated]"
+				} else {
+					text = content
+				}
+			}
+			// Add as a user message with the file content
+			result = append(result, &UserAgentMessage{
+				Content:   []ai.Content{ai.TextContent{Text: "File: " + path + "\n\n" + text}},
+				Timestamp: time.Now(),
+			})
+		}
+	}
+
+	return result
+}
+
 // AgentLoopConfig is the configuration for the agent loop.
 type AgentLoopConfig struct {
 	Model               *ai.Model
@@ -231,6 +316,7 @@ type AgentLoopConfig struct {
 	ToolExecution       ToolExecutionMode
 	ConvertToLLM        func(messages []AgentMessage) ([]ai.Message, error)
 	TransformContext    func(messages []AgentMessage) ([]AgentMessage, error)
+	ContextDistiller    ContextDistiller
 	GetAPIKey           func(provider string) (string, error)
 	GetSteeringMessages func() ([]AgentMessage, error)
 	GetFollowUpMessages func() ([]AgentMessage, error)

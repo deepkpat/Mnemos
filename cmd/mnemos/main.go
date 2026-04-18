@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"mnemos/pkg/agent"
 	"mnemos/pkg/ai"
@@ -18,12 +19,97 @@ import (
 	"mnemos/pkg/coding_agent"
 )
 
+// aiMessageDistiller is a distiller that works at the ai.Message level.
+type aiMessageDistiller interface {
+	Distill(messages []ai.Message) []ai.Message
+}
+
+// identityDistiller returns messages unchanged.
+type identityDistiller struct{}
+
+func (identityDistiller) Distill(messages []ai.Message) []ai.Message {
+	return messages
+}
+
+// simpleDistillerFilterToolNames is the set of tool names to filter.
+var simpleDistillerFilterToolNames = map[string]bool{
+	"read":  true,
+	"write": true,
+	"edit":  true,
+}
+
+// simpleDistiller removes read/write/edit tool calls and replaces them with
+// the actual file contents read from disk.
+type simpleDistiller struct{}
+
+func (d simpleDistiller) Distill(messages []ai.Message) []ai.Message {
+	// First pass: filter tool result messages and collect modified files
+	result := make([]ai.Message, 0, len(messages))
+	modifiedFiles := make(map[string]bool) // path -> true
+
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case ai.ToolResultMessage:
+			// Skip read, write, edit tool results
+			if simpleDistillerFilterToolNames[m.ToolName] {
+				continue
+			}
+			result = append(result, m)
+		case ai.AssistantMessage:
+			// Extract file paths from tool calls
+			for _, c := range m.Content {
+				if tc, ok := c.(ai.ToolCall); ok {
+					if simpleDistillerFilterToolNames[tc.Name] {
+						if path, ok := tc.Arguments["path"].(string); ok {
+							modifiedFiles[path] = true
+						}
+					}
+				}
+			}
+			result = append(result, m)
+		default:
+			result = append(result, m)
+		}
+	}
+
+	// If we have modified files, actually read them and add as user messages
+	if len(modifiedFiles) > 0 {
+		for path := range modifiedFiles {
+			// Resolve path relative to CWD if not absolute
+			absPath := path
+			if !filepath.IsAbs(path) {
+				absPath = filepath.Join(getCwd(), path)
+			}
+			data, err := os.ReadFile(absPath)
+			var content string
+			if err != nil {
+				content = fmt.Sprintf("Error reading file: %v", err)
+			} else {
+				content = string(data)
+				// Truncate if too large
+				if len(content) > 50*1024 {
+					content = content[:50*1024] + "\n... [truncated]"
+				}
+			}
+			// Add as a user message with the file content
+			result = append(result, ai.UserMessage{
+				Content:   []ai.Content{ai.TextContent{Text: "File: " + path + "\n\n" + content}},
+				Timestamp: time.Now(),
+			})
+		}
+	}
+
+	return result
+}
+
 var (
-	modelName    = flag.String("model", "qwen3.5:0.8b", "Model to use")
-	sessionDir   = flag.String("session", "./.sessions", "Session directory")
-	systemPrompt = flag.String("system", "", "System prompt")
-	agentTools   []agent.AgentTool
-	maxTurns     = 16
+	modelName        = flag.String("model", "qwen3.5:0.8b", "Model to use")
+	sessionDir       = flag.String("session", "./.sessions", "Session directory")
+	systemPrompt     = flag.String("system", "", "System prompt")
+	distiller        = flag.String("distiller", "identity", "Context distiller: identity, simple, none")
+	agentTools       []agent.AgentTool
+	maxTurns         = 16
+	currentDistiller aiMessageDistiller
 )
 
 func main() {
@@ -33,6 +119,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: --model is required\n")
 		os.Exit(1)
 	}
+
+	// Create distiller based on flag
+	currentDistiller = createDistiller(*distiller)
 
 	// Register Ollama provider
 	ollama.Register()
@@ -160,6 +249,11 @@ func runAgentLoopStreaming(ctx context.Context, a *agent.Agent, sm *coding_agent
 		// Get session entries and convert to LLM messages
 		entries := sm.GetEntries()
 		messages := convertToLLM(entries)
+
+		// Apply context distiller if configured
+		if currentDistiller != nil {
+			messages = currentDistiller.Distill(messages)
+		}
 
 		// Convert agent tools to AI tools
 		llmTools := convertTools(agentTools)
@@ -510,4 +604,19 @@ Tools available:
 func getCwd() string {
 	cwd, _ := os.Getwd()
 	return cwd
+}
+
+func createDistiller(name string) aiMessageDistiller {
+	switch name {
+	case "identity":
+		return identityDistiller{}
+	case "simple":
+		return simpleDistiller{}
+	case "none":
+		// No-op - return nil to skip distillation
+		return nil
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: unknown distiller %q, using identity\n", name)
+		return identityDistiller{}
+	}
 }

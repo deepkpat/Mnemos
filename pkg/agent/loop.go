@@ -217,6 +217,11 @@ func streamAssistantResponse(
 		}
 	}
 
+	// Apply context distiller if configured
+	if config.ContextDistiller != nil {
+		messages = config.ContextDistiller.Distill(messages)
+	}
+
 	// Convert to LLM-compatible messages
 	llmMessages := make([]ai.Message, len(messages))
 	for i, msg := range messages {
