@@ -19,11 +19,11 @@ import (
 )
 
 var (
-	modelName    = flag.String("model", "qwen2.5:0.8b", "Model to use")
-	sessionDir   = flag.String("session", "./sessions", "Session directory")
+	modelName    = flag.String("model", "qwen3.5:0.8b", "Model to use")
+	sessionDir   = flag.String("session", "./.sessions", "Session directory")
 	systemPrompt = flag.String("system", "", "System prompt")
 	agentTools   []agent.AgentTool
-	maxTurns     = 10
+	maxTurns     = 16
 )
 
 func main() {
@@ -47,20 +47,19 @@ func main() {
 	// Set up system prompt if provided
 	sysPrompt := *systemPrompt
 	if sysPrompt == "" {
-		sysPrompt = `You are a Principal Software Engineer. You are currently working in ` + getCwd() + `
+		sysPrompt = `You are a Principal Software Engineer.
 
 ## PHILOSOPHY
 1. Code Quality: You write clean, maintainable, and "boring" code.
-2. Simplicity: You follow YAGNI (You Ain't Gonna Need It) and avoid over-engineering.
+2. Simplicity: You follow SOLID, and DRY priniciples and avoid over-engineering.
 3. Language Agnostic: You adapt to the tech stack found in the directory.
 
 ## RULES
 1. Tool Limit: Only call ONE tool per response.
 2. Loop: After tool execution, you will receive the output. Analyze it, then decide whether to use another tool or provide a final answer.
 3. Precision: The 'edit' tool requires an exact character-for-character match of 'oldText'.
-4. Boundary: Do not attempt to read or write files outside of '{{getCwd()}}'.
+4. Boundary: Do not attempt to read or write files outside of the current directory.
 5. Response Format: You must always trigger tools using the JSON format: {"tool": "name", "args": { ... }}
-6. File Access: You MUST stay inside the current directory, the tool calls should strictly NEVER affect or see files outside the current dir for example if my current directory is /home/username/project, the i can NOT access '/' or '/home' or '/home/username' or '/home/username2/project2'
 
 ## TOOLS
 - ls({"path": "."}): List directory contents to explore the project structure.
