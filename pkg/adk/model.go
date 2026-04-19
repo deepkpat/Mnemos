@@ -1,6 +1,6 @@
 package adk
 
-// InputModality describes the type of input model accepts
+// Modality describes the type of data AI models can process or generate.
 type Modality string
 
 const (
@@ -8,7 +8,7 @@ const (
 	ModalityImage Modality = "image"
 )
 
-// ModelCost describes pricing per million tokens
+// ModelCost describes pricing per million tokens.
 type ModelCost struct {
 	Input      float64
 	Output     float64
@@ -16,7 +16,7 @@ type ModelCost struct {
 	CacheWrite float64
 }
 
-// Model describes a specific ai model
+// Model describes a specific AI model.
 type Model struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
@@ -30,7 +30,7 @@ type Model struct {
 	MaxTokens       uint64     `json:"max_tokens"`
 }
 
-// CalculateCost computes costs from token usage and model pricing
+// CalculateCost computes costs from token usage and model pricing.
 func (m *Model) CalculateCost(u *Usage) {
 	u.Cost.Input = (m.Cost.Input / 1_000_000) * float64(u.Input)
 	u.Cost.Output = (m.Cost.Output / 1_000_000) * float64(u.Output)
