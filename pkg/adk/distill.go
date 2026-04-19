@@ -37,7 +37,7 @@ func (r *DistillerRegistry) Register(name string, distiller ThreadDistiller) {
 	r.distillers[name] = distiller
 }
 
-// Get retrieves a distiller by name. Returns the identity distiller if not found.
+// Get retrieves a distiller by name. Returns the identity distiller if not found
 func (r *DistillerRegistry) Get(name string) ThreadDistiller {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
