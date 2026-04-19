@@ -1,16 +1,16 @@
 package adk
 
-// ContentType describes the type of message content
+// ContentType describes the type of message content.
 type ContentType string
 
 const (
 	ContentTypeText     ContentType = "text"
 	ContentTypeThinking ContentType = "thinking"
 	ContentTypeImage    ContentType = "image"
-	ContentTypeToolCall ContentType = "tool_call"
+	ContentTypeToolCall ContentType = "toolcall"
 )
 
-// Text represents plain text output from the model
+// Text represents plain text output from the model.
 type Text struct {
 	Text          string `json:"text"`
 	TextSignature string `json:"text_signature,omitempty"`
@@ -18,7 +18,7 @@ type Text struct {
 
 func (c Text) ContentType() ContentType { return ContentTypeText }
 
-// Thinking represents chain of thought reasoning
+// Thinking represents chain of thought reasoning.
 type Thinking struct {
 	Thinking          string `json:"thinking"`
 	ThinkingSignature string `json:"thinking_signature,omitempty"`
@@ -27,7 +27,7 @@ type Thinking struct {
 
 func (c Thinking) ContentType() ContentType { return ContentTypeThinking }
 
-// Image represents base64 encoded image data
+// Image represents base64 encoded image data.
 type Image struct {
 	Data     string `json:"data"`      // base64 encoded
 	MimeType string `json:"mime_type"` // e.g. "image/png"
@@ -45,7 +45,7 @@ type ToolCall struct {
 
 func (c ToolCall) ContentType() ContentType { return ContentTypeToolCall }
 
-// Content is the interface implemented by all content block types
+// Content is the interface implemented by all content block types.
 type Content interface {
 	ContentType() ContentType
 }
