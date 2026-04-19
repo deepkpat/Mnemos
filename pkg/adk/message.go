@@ -2,7 +2,7 @@ package adk
 
 import "time"
 
-// Role is the role of a message in a conversation
+// Role is the role of a message in a conversation.
 type Role string
 
 const (
@@ -11,7 +11,7 @@ const (
 	RoleToolResult Role = "tool_result"
 )
 
-// UserMessage is a message from the user
+// UserMessage is a message from the user.
 type UserMessage struct {
 	Content   []Content `json:"content"` // [](Text|Image)
 	Timestamp time.Time `json:"timestamp"`
@@ -19,7 +19,7 @@ type UserMessage struct {
 
 func (m UserMessage) Role() Role { return RoleUser }
 
-// StopReason indicates why the model stopped generating
+// StopReason indicates why the model stopped generating.
 type StopReason string
 
 const (
@@ -30,7 +30,7 @@ const (
 	StopReasonAborted StopReason = "aborted"  // cancelled by caller
 )
 
-// AssistantMessage is a response from the model
+// AssistantMessage is a response from the model.
 type AssistantMessage struct {
 	Content      []Content  `json:"content"` // [](Text|Thinking|ToolCall)
 	API          string     `json:"api"`
@@ -45,7 +45,7 @@ type AssistantMessage struct {
 
 func (m AssistantMessage) Role() Role { return RoleAssistant }
 
-// ToolResultMessage carries the result of a tool execution back to the model
+// ToolResultMessage carries the result of a tool execution back to the model.
 type ToolResultMessage struct {
 	ToolCallID string    `json:"tool_call_id"`
 	ToolName   string    `json:"tool_name"`
@@ -56,7 +56,7 @@ type ToolResultMessage struct {
 
 func (m ToolResultMessage) Role() Role { return RoleToolResult }
 
-// Message is the interface implemented by all message types
+// Message is the interface implemented by all message types.
 type Message interface {
 	Role() Role
 }
