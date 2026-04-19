@@ -52,27 +52,42 @@ func (d simpleDistiller) Distill(messages []ai.Message) []ai.Message {
 		case ai.ToolResultMessage:
 			// Skip read, write, edit tool results
 			if simpleDistillerFilterToolNames[m.ToolName] {
+				dummy := []ai.Content{
+					ai.TextContent{Text: m.ToolName + " was called"},
+				}
+				result = append(result, ai.ToolResultMessage{
+					ToolCallID: m.ToolCallID,
+					ToolName:   m.ToolName,
+					Content:    dummy,
+				})
 				continue
 			}
 			result = append(result, m)
 		case ai.AssistantMessage:
-			// Extract file paths from tool calls
+			// Extract file paths from tool calls and filter them out
+			filteredContent := make([]ai.Content, 0, len(m.Content))
 			for _, c := range m.Content {
 				if tc, ok := c.(ai.ToolCall); ok {
 					if simpleDistillerFilterToolNames[tc.Name] {
 						if path, ok := tc.Arguments["path"].(string); ok {
 							modifiedFiles[path] = true
 						}
+						continue // Skip this tool call
 					}
+					filteredContent = append(filteredContent, c)
+				} else {
+					filteredContent = append(filteredContent, c)
 				}
 			}
+			// Add assistant message without the filtered tool calls
+			m.Content = filteredContent
 			result = append(result, m)
 		default:
 			result = append(result, m)
 		}
 	}
 
-	// If we have modified files, actually read them and add as user messages
+	// If we have modified files, actually read them and add as tool result messages
 	if len(modifiedFiles) > 0 {
 		for path := range modifiedFiles {
 			// Resolve path relative to CWD if not absolute
@@ -81,20 +96,20 @@ func (d simpleDistiller) Distill(messages []ai.Message) []ai.Message {
 				absPath = filepath.Join(getCwd(), path)
 			}
 			data, err := os.ReadFile(absPath)
-			var content string
+			prefix := "this is the most updated " + path + " previous tool results may be from an older version of the code \n"
+			var content []ai.Content
 			if err != nil {
-				content = fmt.Sprintf("Error reading file: %v", err)
+				content = []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error reading file: %v", err)}}
 			} else {
-				content = string(data)
-				// Truncate if too large
-				if len(content) > 50*1024 {
-					content = content[:50*1024] + "\n... [truncated]"
-				}
+				content = []ai.Content{ai.TextContent{Text: prefix + string(data)}}
 			}
-			// Add as a user message with the file content
-			result = append(result, ai.UserMessage{
-				Content:   []ai.Content{ai.TextContent{Text: "File: " + path + "\n\n" + content}},
-				Timestamp: time.Now(),
+			// Add as a tool result message
+			result = append(result, ai.ToolResultMessage{
+				ToolCallID: "distilled-read-" + path,
+				ToolName:   "read",
+				Content:    content,
+				IsError:    err != nil,
+				Timestamp:  time.Now(),
 			})
 		}
 	}
@@ -103,13 +118,14 @@ func (d simpleDistiller) Distill(messages []ai.Message) []ai.Message {
 }
 
 var (
-	modelName        = flag.String("model", "qwen3.5:0.8b", "Model to use")
-	sessionDir       = flag.String("session", "./.sessions", "Session directory")
-	systemPrompt     = flag.String("system", "", "System prompt")
-	distiller        = flag.String("distiller", "identity", "Context distiller: identity, simple, none")
-	agentTools       []agent.AgentTool
-	maxTurns         = 16
-	currentDistiller aiMessageDistiller
+	modelName          = flag.String("model", "qwen3.5:0.8b", "Model to use")
+	sessionDir         = flag.String("session", "./.sessions", "Session directory")
+	systemPrompt       = flag.String("system", "", "System prompt")
+	systemPromptFile   = flag.String("system-prompt-file", "", "File to read system prompt from (overrides --system)")
+	distiller          = flag.String("distiller", "simple", "Context distiller: identity, simple, none")
+	agentTools         []agent.AgentTool
+	maxTurns           = 16
+	currentDistiller   aiMessageDistiller
 )
 
 func main() {
@@ -135,32 +151,43 @@ func main() {
 
 	// Set up system prompt if provided
 	sysPrompt := *systemPrompt
+	// If --system-prompt-file is provided, read from file (overrides --system)
+	if *systemPromptFile != "" {
+		data, err := os.ReadFile(*systemPromptFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading system prompt file: %v\n", err)
+			os.Exit(1)
+		}
+		sysPrompt = string(data)
+	}
 	if sysPrompt == "" {
-		sysPrompt = `You are a Principal Software Engineer.
-
-## PHILOSOPHY
+		sysPrompt = `## PHILOSOPHY
 1. Code Quality: You write clean, maintainable, and "boring" code.
-2. Simplicity: You follow SOLID, and DRY priniciples and avoid over-engineering.
-3. Language Agnostic: You adapt to the tech stack found in the directory.
+2. Simplicity: You follow SOLID and DRY principles; avoid over-engineering.
+3. Language Agnostic: Adapt to the tech stack in the directory.
 
 ## RULES
 1. Tool Limit: Only call ONE tool per response.
-2. Loop: After tool execution, you will receive the output. Analyze it, then decide whether to use another tool or provide a final answer.
-3. Precision: The 'edit' tool requires an exact character-for-character match of 'oldText'.
-4. Boundary: Do not attempt to read or write files outside of the current directory.
-5. Response Format: You must always trigger tools using the JSON format: {"tool": "name", "args": { ... }}
+2. Loop: After execution, analyze the output and decide the next step.
+3. Precision: The 'edit' tool requires an exact character-for-character match.
+4. Boundary: Do not read/write files outside the current directory.
+5. Response Format: Always trigger tools using JSON: {"tool": "name", "args": { ... }}
+6. State Traceability: If a test or any code fails, you must explicitly write out the current state of variables (e.g., pointers, list order, or index values) before proposing a fix. Do not assume the test is wrong until you have mapped the pointer logic step-by-step.
 
 ## TOOLS
-- ls({"path": "."}): List directory contents to explore the project structure.
-- read({"path": "filename"}): Read the full content of a specific file.
-- write({"path": "filename", "content": "..."}): Create or overwrite a file.
-- edit({"path": "filename", "oldText": "...", "newText": "..."}): Replace an exact string with new text.
-- bash({"command": "..."}): Execute shell commands (compilers, tests, linters, or package managers).
+- ls({"path": "."}): List directory contents.
+- read({"path": "filename"}): Read full file content.
+- write({"path": "filename", "content": "..."}): Create/overwrite a file.
+- edit({"path": "filename", "oldText": "...", "newText": "..."}): Exact string replacement.
+- bash({"command": "..."}): Execute shell commands (tests, builds, etc.).
 
 ## EXECUTION PROCESS
-1. Discovery: Start by listing files to identify the programming language and architecture.
-2. Planning: Briefly explain your logic before issuing a tool call.
-3. Verification: After modifying files, always use the 'bash' tool to run the appropriate test or build command for that environment to ensure stability.`
+1. Discovery: List files. If AGENTS.md exists, read it for specific constraints.
+2. Analysis & Trace:
+   - If fixing a bug: Briefly trace the execution of the failing code.
+   - Identify the exact line where the actual state diverges from the expected state.
+3. Planning: Explain your logic and the specific state change you intend to make.
+4. Verification: After any 'write' or 'edit', use 'bash' to run tests. If the test still fails, re-read the file to ensure the 'edit' applied correctly before trying a different fix.`
 	}
 
 	// Create session manager

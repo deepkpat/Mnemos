@@ -266,40 +266,45 @@ func (d SimpleDistiller) Distill(messages []AgentMessage) []AgentMessage {
 			}
 			result = append(result, m)
 		case *AssistantAgentMessage:
-			// Extract file paths from tool calls
+			// Extract file paths from tool calls and filter them out
+			filteredContent := make([]ai.Content, 0, len(m.Content))
 			for _, c := range m.Content {
 				if tc, ok := c.(ai.ToolCall); ok {
 					if simpleDistillerFilterToolNames[tc.Name] {
 						if path, ok := tc.Arguments["path"].(string); ok {
 							modifiedFiles[path] = true
 						}
+						continue // Skip this tool call
 					}
+					filteredContent = append(filteredContent, c)
+				} else {
+					filteredContent = append(filteredContent, c)
 				}
 			}
+			// Add assistant message without the filtered tool calls
+			m.Content = filteredContent
 			result = append(result, m)
 		default:
 			result = append(result, m)
 		}
 	}
 
-	// If we have a file reader and modified files, read them and add as user messages
+	// If we have a file reader and modified files, read them and add as tool result messages
 	if d.FileReader != nil && len(modifiedFiles) > 0 {
 		for path := range modifiedFiles {
 			content, err := d.FileReader(path)
-			var text string
+			var fileContent []ai.Content
 			if err != nil {
-				text = fmt.Sprintf("Error reading file: %v", err)
+				fileContent = []ai.Content{ai.TextContent{Text: fmt.Sprintf("Error reading file: %v", err)}}
 			} else {
-				// Truncate if too large
-				if len(content) > 50*1024 {
-					text = content[:50*1024] + "\n... [truncated]"
-				} else {
-					text = content
-				}
+				fileContent = []ai.Content{ai.TextContent{Text: content}}
 			}
-			// Add as a user message with the file content
-			result = append(result, &UserAgentMessage{
-				Content:   []ai.Content{ai.TextContent{Text: "File: " + path + "\n\n" + text}},
+			// Add as a tool result message
+			result = append(result, &ToolResultAgentMessage{
+				ToolCallID: "distilled-read-" + path,
+				ToolName: "read",
+				Content:  fileContent,
+				IsError:  err != nil,
 				Timestamp: time.Now(),
 			})
 		}

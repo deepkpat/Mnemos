@@ -139,6 +139,7 @@ func BashExec(ctx context.Context, command string, opts *BashExecOptions) (*Bash
 
 	// Get exit code
 	exitCode := 0
+	timeoutOccurred := false
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			exitCode = exitError.ExitCode()
@@ -147,7 +148,7 @@ func BashExec(ctx context.Context, command string, opts *BashExecOptions) (*Bash
 			if cmd.Process != nil {
 				cmd.Process.Kill()
 			}
-			return nil, fmt.Errorf("command timed out after %v", opts.Timeout)
+			timeoutOccurred = true
 		} else if ctx.Err() == context.Canceled {
 			// Command was cancelled
 			if cmd.Process != nil {
@@ -170,7 +171,11 @@ func BashExec(ctx context.Context, command string, opts *BashExecOptions) (*Bash
 		ExitCode: exitCode,
 	}
 
-	if truncation.Truncated {
+	if timeoutOccurred {
+		// Add timeout notice to output
+		timeoutMsg := fmt.Sprintf("\n\n[Command timed out after %v. Output captured so far shown above.]", opts.Timeout)
+		result.Content = []ai.Content{ai.TextContent{Text: truncation.Content + timeoutMsg}}
+	} else if truncation.Truncated {
 		result.Truncation = &truncation
 		// Add truncation notice to output
 		notice := ""
