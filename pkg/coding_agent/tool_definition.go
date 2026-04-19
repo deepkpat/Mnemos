@@ -1,6 +1,8 @@
 package coding_agent
 
 import (
+	"context"
+
 	"mnemos/pkg/agent"
 	"mnemos/pkg/ai"
 )
@@ -304,7 +306,7 @@ type CodingTool struct {
 	Label       string
 	Parameters  map[string]interface{}
 	Categories  []string
-	Run         func(input map[string]any, signal <-chan struct{}) ([]ai.Content, error)
+	Run         func(input map[string]any, ctx context.Context) ([]ai.Content, error)
 }
 
 // ToolName returns the tool name.
@@ -325,8 +327,8 @@ func (t *CodingTool) ToolParameters() map[string]any {
 }
 
 // Execute runs the tool.
-func (t *CodingTool) Execute(toolCallID string, args map[string]any, signal <-chan struct{}, onUpdate func(*agent.AgentToolResult[any])) (*agent.AgentToolResult[any], error) {
-	content, err := t.Run(args, signal)
+func (t *CodingTool) Execute(toolCallID string, args map[string]any, ctx context.Context, onUpdate func(*agent.AgentToolResult[any])) (*agent.AgentToolResult[any], error) {
+	content, err := t.Run(args, ctx)
 	if err != nil {
 		return &agent.AgentToolResult[any]{
 			Content: []ai.Content{ai.TextContent{Text: err.Error()}},
@@ -353,7 +355,7 @@ func NewBashTool(exec func(string, *BashOptions) (*BashResult, error)) *CodingTo
 			"required": []string{"command"},
 		},
 		Categories: []string{"tool"},
-		Run: func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+		Run: func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 			cmd, _ := input["command"].(string)
 			opts := DefaultBashOptions()
 			result, err := exec(cmd, opts)

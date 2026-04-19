@@ -24,7 +24,7 @@ func RunAgentLoop(
 	context_ AgentContext,
 	config AgentLoopConfig,
 	emit EventSink,
-	signal <-chan struct{},
+	ctx context.Context,
 	streamFn StreamFunction,
 ) ([]AgentMessage, error) {
 	if streamFn == nil {
@@ -48,7 +48,7 @@ func RunAgentLoop(
 		emit(AgentEvent{Type: EventMessageEnd, Message: msg})
 	}
 
-	err := runLoop(currentContext, newMessages, config, emit, signal, streamFn)
+	err := runLoop(currentContext, newMessages, config, emit, ctx, streamFn)
 	if err != nil {
 		return newMessages, err
 	}
@@ -64,7 +64,7 @@ func RunAgentLoopContinue(
 	context_ AgentContext,
 	config AgentLoopConfig,
 	emit EventSink,
-	signal <-chan struct{},
+	ctx context.Context,
 	streamFn StreamFunction,
 ) ([]AgentMessage, error) {
 	if streamFn == nil {
@@ -86,7 +86,7 @@ func RunAgentLoopContinue(
 	emit(AgentEvent{Type: EventAgentStart})
 	emit(AgentEvent{Type: EventTurnStart})
 
-	err := runLoop(context_, newMessages, config, emit, signal, streamFn)
+	err := runLoop(context_, newMessages, config, emit, ctx, streamFn)
 	if err != nil {
 		return newMessages, err
 	}
@@ -100,7 +100,7 @@ func runLoop(
 	newMessages []AgentMessage,
 	config AgentLoopConfig,
 	emit EventSink,
-	signal <-chan struct{},
+	ctx context.Context,
 	streamFn StreamFunction,
 ) error {
 	firstTurn := true
@@ -136,7 +136,7 @@ func runLoop(
 			}
 
 			// Stream assistant response
-			message, err := streamAssistantResponse(currentContext, config, signal, emit, streamFn)
+			message, err := streamAssistantResponse(currentContext, config, ctx, emit, streamFn)
 			if err != nil {
 				return err
 			}
@@ -162,7 +162,7 @@ func runLoop(
 			var toolResults []ToolResultAgentMessage
 			if hasMoreToolCalls {
 				var err error
-				toolResults, err = executeToolCalls(currentContext, assistantMsg, toolCalls, config, signal, emit)
+				toolResults, err = executeToolCalls(currentContext, assistantMsg, toolCalls, config, ctx, emit)
 				if err != nil {
 					return err
 				}
@@ -203,7 +203,7 @@ func runLoop(
 func streamAssistantResponse(
 	context_ AgentContext,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 	streamFn StreamFunction,
 ) (ai.AssistantMessage, error) {
@@ -259,21 +259,6 @@ func streamAssistantResponse(
 	if config.GetAPIKey != nil {
 		key, _ := config.GetAPIKey(config.Model.Provider)
 		opts.APIKey = key
-	}
-
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Handle abort signal
-	if signal != nil {
-		go func() {
-			select {
-			case <-signal:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
 	}
 
 	// Stream response
@@ -344,13 +329,13 @@ func executeToolCalls(
 	assistantMsg *AssistantAgentMessage,
 	toolCalls []*ai.ToolCall,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 ) ([]ToolResultAgentMessage, error) {
 	if config.ToolExecution == ToolExecutionSequential {
-		return executeToolCallsSequential(context_, assistantMsg, toolCalls, config, signal, emit)
+		return executeToolCallsSequential(context_, assistantMsg, toolCalls, config, ctx, emit)
 	}
-	return executeToolCallsParallel(context_, assistantMsg, toolCalls, config, signal, emit)
+	return executeToolCallsParallel(context_, assistantMsg, toolCalls, config, ctx, emit)
 }
 
 func executeToolCallsSequential(
@@ -358,7 +343,7 @@ func executeToolCallsSequential(
 	assistantMsg *AssistantAgentMessage,
 	toolCalls []*ai.ToolCall,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 ) ([]ToolResultAgentMessage, error) {
 	results := make([]ToolResultAgentMessage, 0, len(toolCalls))
@@ -371,7 +356,7 @@ func executeToolCallsSequential(
 			Args:       tc.Arguments,
 		})
 
-		result, isError := executeSingleToolCall(context_, assistantMsg, tc, config, signal, emit)
+		result, isError := executeSingleToolCall(context_, assistantMsg, tc, config, ctx, emit)
 		results = append(results, result)
 
 		emit(AgentEvent{
@@ -391,7 +376,7 @@ func executeToolCallsParallel(
 	assistantMsg *AssistantAgentMessage,
 	toolCalls []*ai.ToolCall,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 ) ([]ToolResultAgentMessage, error) {
 	// Prepare all tool calls first
@@ -451,7 +436,7 @@ func executeToolCallsParallel(
 
 	for i, p := range prepared {
 		go func(idx int, pc preparedCall) {
-			result, _ := executeToolDirect(context_, assistantMsg, pc.toolCall, pc.tool, pc.args, config, signal, emit)
+			result, _ := executeToolDirect(context_, assistantMsg, pc.toolCall, pc.tool, pc.args, config, ctx, emit)
 			resultChan <- resultPair{index: idx, msg: result}
 		}(i, p)
 	}
@@ -480,7 +465,7 @@ func executeSingleToolCall(
 	assistantMsg *AssistantAgentMessage,
 	toolCall *ai.ToolCall,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 ) (ToolResultAgentMessage, bool) {
 	// Find tool
@@ -496,7 +481,7 @@ func executeSingleToolCall(
 		return newToolErrorResult(toolCall.ID, toolCall.Name, "tool not found"), true
 	}
 
-	return executeToolDirect(context_, assistantMsg, toolCall, tool, toolCall.Arguments, config, signal, emit)
+	return executeToolDirect(context_, assistantMsg, toolCall, tool, toolCall.Arguments, config, ctx, emit)
 }
 
 func executeToolDirect(
@@ -506,7 +491,7 @@ func executeToolDirect(
 	tool AgentTool,
 	args map[string]any,
 	config AgentLoopConfig,
-	signal <-chan struct{},
+	ctx context.Context,
 	emit EventSink,
 ) (ToolResultAgentMessage, bool) {
 	// Call beforeToolCall hook if configured
@@ -536,7 +521,7 @@ func executeToolDirect(
 		}
 	}
 
-	execResult, err := tool.Execute(toolCall.ID, args, signal, onUpdate)
+	execResult, err := tool.Execute(toolCall.ID, args, ctx, onUpdate)
 	isError := err != nil
 	if err != nil {
 		execResult = &AgentToolResult[any]{

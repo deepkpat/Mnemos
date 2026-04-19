@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"sync"
 
 	"mnemos/pkg/ai"
@@ -18,8 +19,11 @@ type Agent struct {
 	steeringQueue *pendingMessageQueue
 	followUpQueue *pendingMessageQueue
 	listeners     map[*eventListener]struct{}
-	activeRun     *activeRun
 	sessionID     string
+
+	// Run context for cancellation
+	runCtx    context.Context
+	runCancel context.CancelFunc
 
 	// Configuration
 	convertToLLM     func([]AgentMessage) ([]ai.Message, error)
@@ -29,44 +33,6 @@ type Agent struct {
 	beforeToolCall   func(BeforeToolCallContext) (*BeforeToolCallResult, error)
 	afterToolCall    func(AfterToolCallContext) (*AfterToolCallResult, error)
 	toolExecution    ToolExecutionMode
-}
-
-// activeRun holds the state of an active agent run.
-type activeRun struct {
-	promise   *promise_
-	abortCtrl *abortController
-}
-
-// promise_ is a simple promise implementation.
-type promise_ struct {
-	mu      sync.Mutex
-	done    bool
-	resolve func()
-}
-
-// abortController mimics AbortController behavior.
-type abortController struct {
-	signal chan struct{}
-}
-
-// newAbortController creates a new abort controller.
-func newAbortController() *abortController {
-	return &abortController{
-		signal: make(chan struct{}),
-	}
-}
-
-// Signal returns the abort signal channel.
-func (ac *abortController) Signal() <-chan struct{} {
-	return ac.signal
-}
-
-// Abort signals abort to the controller.
-func (ac *abortController) Abort() {
-	select {
-	case ac.signal <- struct{}{}:
-	default:
-	}
 }
 
 // pendingMessageQueue handles queued messages.
@@ -387,8 +353,8 @@ func (a *Agent) HasQueuedMessages() bool {
 func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.activeRun != nil {
-		a.activeRun.abortCtrl.Abort()
+	if a.runCancel != nil {
+		a.runCancel()
 	}
 }
 

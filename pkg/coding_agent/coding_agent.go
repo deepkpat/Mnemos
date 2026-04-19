@@ -36,7 +36,7 @@ type CodingEvent struct {
 }
 
 // ToolExecutor executes a tool with the given input.
-type ToolExecutor func(input map[string]any, signal <-chan struct{}) ([]ai.Content, error)
+type ToolExecutor func(input map[string]any, ctx context.Context) ([]ai.Content, error)
 
 // NewCodingAgent creates a new coding agent.
 func NewCodingAgent(opts *CodingAgentOptions) (*CodingAgent, error) {
@@ -153,21 +153,21 @@ func (ca *CodingAgent) RegisterDefaultTools() {
 	defer ca.mu.Unlock()
 
 	// Register bash tool
-	ca.tools["bash"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["bash"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		cmd, _ := input["command"].(string)
 		result, err := runBash(cmd, ca.cwd)
 		return result, err
 	}
 
 	// Register read tool
-	ca.tools["read"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["read"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		path, _ := input["path"].(string)
 		result, err := runRead(path)
 		return result, err
 	}
 
 	// Register write tool
-	ca.tools["write"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["write"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		path, _ := input["path"].(string)
 		content, _ := input["content"].(string)
 		result, err := runWrite(path, content)
@@ -175,7 +175,7 @@ func (ca *CodingAgent) RegisterDefaultTools() {
 	}
 
 	// Register edit tool
-	ca.tools["edit"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["edit"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		path, _ := input["path"].(string)
 		diff, _ := input["diff"].(string)
 		result, err := runEdit(path, diff)
@@ -183,7 +183,7 @@ func (ca *CodingAgent) RegisterDefaultTools() {
 	}
 
 	// Register ls tool
-	ca.tools["ls"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["ls"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		path, _ := input["path"].(string)
 		if path == "" {
 			path = "."
@@ -193,7 +193,7 @@ func (ca *CodingAgent) RegisterDefaultTools() {
 	}
 
 	// Register grep tool
-	ca.tools["grep"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["grep"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		pattern, _ := input["pattern"].(string)
 		path, _ := input["path"].(string)
 		result, err := runGrep(pattern, path)
@@ -201,7 +201,7 @@ func (ca *CodingAgent) RegisterDefaultTools() {
 	}
 
 	// Register find tool
-	ca.tools["find"] = func(input map[string]any, _ <-chan struct{}) ([]ai.Content, error) {
+	ca.tools["find"] = func(input map[string]any, _ context.Context) ([]ai.Content, error) {
 		path, _ := input["path"].(string)
 		name, _ := input["name"].(string)
 		result, err := runFind(path, name)

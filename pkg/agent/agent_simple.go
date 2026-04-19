@@ -35,30 +35,26 @@ func (a *Agent) PromptMessage(msg AgentMessage) error {
 // PromptMessages starts a new prompt with multiple agent messages.
 func (a *Agent) PromptMessages(messages []AgentMessage) error {
 	a.mu.Lock()
-	if a.activeRun != nil {
+	if a.runCtx != nil {
 		a.mu.Unlock()
 		return ErrAgentBusy
 	}
 
-	// Create abort controller
-	abortCtrl := newAbortController()
-	promise := &promise_{}
-
-	a.activeRun = &activeRun{
-		promise:   promise,
-		abortCtrl: abortCtrl,
-	}
+	// Create context with cancel for this run
+	ctx, cancel := context.WithCancel(context.Background())
+	a.runCtx = ctx
+	a.runCancel = cancel
 
 	a.mu.Unlock()
 
 	// Run in background
 	go func() {
-		a.runPrompt(messages)
+		a.runPrompt(messages, ctx)
 		a.mu.Lock()
-		a.activeRun = nil
+		a.runCtx = nil
+		a.runCancel = nil
 		a.state.IsStreaming = false
 		a.mu.Unlock()
-		promise.doResolve()
 	}()
 
 	return nil
@@ -67,41 +63,37 @@ func (a *Agent) PromptMessages(messages []AgentMessage) error {
 // Continue continues from the current transcript.
 func (a *Agent) Continue() error {
 	a.mu.Lock()
-	if a.activeRun != nil {
+	if a.runCtx != nil {
 		a.mu.Unlock()
 		return ErrAgentBusy
 	}
 
 	if len(a.state.Messages) == 0 {
 		a.mu.Unlock()
-		return errors.New("agent: no messages to continue from")
+		return errNoMessages
 	}
 
 	lastMsg := a.state.Messages[len(a.state.Messages)-1]
 	if _, ok := lastMsg.(*AssistantAgentMessage); ok {
 		a.mu.Unlock()
-		return errors.New("agent: cannot continue from message role: assistant")
+		return errCannotContinueFromAssistant
 	}
 
-	// Create abort controller
-	abortCtrl := newAbortController()
-	promise := &promise_{}
-
-	a.activeRun = &activeRun{
-		promise:   promise,
-		abortCtrl: abortCtrl,
-	}
+	// Create context with cancel for this run
+	ctx, cancel := context.WithCancel(context.Background())
+	a.runCtx = ctx
+	a.runCancel = cancel
 
 	a.mu.Unlock()
 
 	// Run in background
 	go func() {
-		a.runContinuation()
+		a.runContinuation(ctx)
 		a.mu.Lock()
-		a.activeRun = nil
+		a.runCtx = nil
+		a.runCancel = nil
 		a.state.IsStreaming = false
 		a.mu.Unlock()
-		promise.doResolve()
 	}()
 
 	return nil
@@ -110,16 +102,16 @@ func (a *Agent) Continue() error {
 // Wait blocks until the current run completes.
 func (a *Agent) Wait() {
 	a.mu.RLock()
-	promise := a.activeRun
+	ctx := a.runCtx
 	a.mu.RUnlock()
 
-	if promise != nil {
-		promise.promise.wait()
+	if ctx != nil {
+		<-ctx.Done()
 	}
 }
 
 // runPrompt runs a new prompt.
-func (a *Agent) runPrompt(messages []AgentMessage) error {
+func (a *Agent) runPrompt(messages []AgentMessage, runCtx context.Context) error {
 	config := a.createLoopConfig()
 	ctx := a.createContextSnapshot()
 
@@ -135,37 +127,18 @@ func (a *Agent) runPrompt(messages []AgentMessage) error {
 	}
 
 	// Run the loop
-	_, err := RunAgentLoop(messages, ctx, *config, a.emitAndProcess, a.activeRun.abortCtrl.Signal(), a.streamFn)
+	_, err := RunAgentLoop(messages, ctx, *config, a.emitAndProcess, runCtx, a.streamFn)
 	return err
 }
 
 // runContinuation continues from the current context.
-func (a *Agent) runContinuation() error {
+func (a *Agent) runContinuation(runCtx context.Context) error {
 	config := a.createLoopConfig()
 	ctx := a.createContextSnapshot()
 
 	// Run the continue loop
-	_, err := RunAgentLoopContinue(ctx, *config, a.emitAndProcess, a.activeRun.abortCtrl.Signal(), a.streamFn)
+	_, err := RunAgentLoopContinue(ctx, *config, a.emitAndProcess, runCtx, a.streamFn)
 	return err
-}
-
-// promise methods
-func (p *promise_) wait() {
-	p.mu.Lock()
-	for !p.done {
-		p.mu.Unlock()
-		p.mu.Lock()
-	}
-	p.mu.Unlock()
-}
-
-func (p *promise_) doResolve() {
-	p.mu.Lock()
-	p.done = true
-	p.mu.Unlock()
-	if p.resolve != nil {
-		p.resolve()
-	}
 }
 
 // SimpleAgent is a simpler synchronous version of the Agent.

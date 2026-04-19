@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -165,7 +166,7 @@ type AgentTool interface {
 	ToolDescription() string
 	ToolLabel() string
 	ToolParameters() map[string]any
-	Execute(toolCallID string, args map[string]any, signal <-chan struct{}, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error)
+	Execute(toolCallID string, args map[string]any, ctx context.Context, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error)
 }
 
 // SimpleTool is a basic tool implementation that uses any for parameters and results.
@@ -175,15 +176,15 @@ type SimpleTool struct {
 	Description string
 	Label       string
 	Parameters  map[string]any // JSON Schema
-	Run         func(toolCallID string, args map[string]any, signal <-chan struct{}, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error)
+	Run         func(toolCallID string, args map[string]any, ctx context.Context, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error)
 }
 
 func (t *SimpleTool) ToolName() string               { return t.Name }
 func (t *SimpleTool) ToolDescription() string        { return t.Description }
 func (t *SimpleTool) ToolLabel() string              { return t.Label }
 func (t *SimpleTool) ToolParameters() map[string]any { return t.Parameters }
-func (t *SimpleTool) Execute(toolCallID string, args map[string]any, signal <-chan struct{}, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error) {
-	return t.Run(toolCallID, args, signal, onUpdate)
+func (t *SimpleTool) Execute(toolCallID string, args map[string]any, ctx context.Context, onUpdate func(*AgentToolResult[any])) (*AgentToolResult[any], error) {
+	return t.Run(toolCallID, args, ctx, onUpdate)
 }
 
 // AgentContext is a snapshot of the agent context at a point in time.

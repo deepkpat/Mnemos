@@ -546,7 +546,7 @@ func (t *codingAgentTool) ToolDescription() string        { return t.description
 func (t *codingAgentTool) ToolLabel() string              { return t.label }
 func (t *codingAgentTool) ToolParameters() map[string]any { return t.params }
 
-func (t *codingAgentTool) Execute(toolCallID string, args map[string]any, signal <-chan struct{}, onUpdate func(*agent.AgentToolResult[any])) (*agent.AgentToolResult[any], error) {
+func (t *codingAgentTool) Execute(toolCallID string, args map[string]any, ctx context.Context, onUpdate func(*agent.AgentToolResult[any])) (*agent.AgentToolResult[any], error) {
 	content, err := t.run(args)
 	return &agent.AgentToolResult[any]{Content: content}, err
 }
