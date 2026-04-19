@@ -1,6 +1,6 @@
 package adk
 
-// Usage tracks token consumption and associated costs
+// Usage tracks token consumption and associated costs.
 type Usage struct {
 	Input       uint64    `json:"input"`
 	Output      uint64    `json:"output"`
@@ -10,7 +10,7 @@ type Usage struct {
 	Cost        UsageCost `json:"cost"`
 }
 
-// UsageCost tracks the dollar cost breakdown
+// UsageCost tracks the dollar cost breakdown.
 type UsageCost struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
@@ -19,7 +19,7 @@ type UsageCost struct {
 	Total      float64 `json:"total"`
 }
 
-// ZeroUsage returns a Usage with all fields zeroed
+// ZeroUsage returns a Usage with all fields zeroed.
 func ZeroUsage() Usage {
 	return Usage{}
 }
